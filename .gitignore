@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+*.log
+.npm/
+
+# Env / secrets — never commit these.
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+credentials*.json
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Local databases / dumps
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Tooling local state
+.claude/

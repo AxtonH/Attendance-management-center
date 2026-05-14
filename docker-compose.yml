@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Amman}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      CONFIG_DIR: /config
+      CORS_ALLOW_ORIGINS: http://localhost:3000
+    volumes:
+      - ./config:/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_started

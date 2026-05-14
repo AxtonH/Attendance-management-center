@@ -1,0 +1,14 @@
+# Phase 1: single org-wide shift.
+# Phase 2 will replace this file with per-department or per-employee schedules
+# pulled from Odoo. The keys here should stay stable so domain code doesn't change.
+
+default_shift:
+  start: "09:00"           # Local time (Asia/Amman). First punch at/after this is on-time.
+  grace_minutes: 15        # First punch within grace = on-time. After = late.
+  absent_after: "10:30"    # No punch by this time = absent.
+  full_day_minutes: 480    # Expected workday length. Under this with both punches → incomplete-hours exception.
+  wfh_weekdays: [3]        # Mon=0..Sun=6. Thursday is WFH for everyone (phase 2 placeholder; phase 3 will pull from Odoo).
+
+# Reserved for phase 2; ignored in phase 1.
+department_overrides: {}
+employee_overrides: {}
