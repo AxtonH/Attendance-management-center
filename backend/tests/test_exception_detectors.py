@@ -17,9 +17,10 @@ from app.features.dashboard.service import build_exceptions
 
 from tests._fixtures import DAY, RULE, emp, punch
 
-# NOW values for "before cutoff" (10:30 absent cutoff per RULE) and "after".
-BEFORE_CUTOFF = datetime(2026, 5, 12, 10, 0)
-AFTER_CUTOFF = datetime(2026, 5, 12, 11, 0)
+# NOW values for "within grace window" and "past grace end". The single
+# threshold is shift_start + grace_minutes = 09:00 + 15 = 09:15.
+BEFORE_CUTOFF = datetime(2026, 5, 12, 9, 5)   # still within grace
+AFTER_CUTOFF = datetime(2026, 5, 12, 11, 0)    # well past grace_end
 PREV_DAY = date(2026, 5, 11)
 
 

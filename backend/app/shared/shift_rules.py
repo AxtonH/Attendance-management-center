@@ -18,12 +18,17 @@ def shift_start_dt(rule: ShiftRule, day: date) -> datetime:
     return datetime.combine(day, _parse_hhmm(rule.start))
 
 
-def absent_cutoff_dt(rule: ShiftRule, day: date) -> datetime:
-    return datetime.combine(day, _parse_hhmm(rule.absent_after))
-
-
 def grace_end_dt(rule: ShiftRule, day: date) -> datetime:
     return shift_start_dt(rule, day) + timedelta(minutes=rule.grace_minutes)
+
+
+# A single threshold drives both late and absent. The moment grace ends,
+# anyone who hasn't punched is provisionally absent — if they punch in
+# later, the count drops automatically. This used to be a separate
+# `absent_after` config knob (10:30), which made the tile and panel
+# disagree for 90 minutes every morning.
+def absent_cutoff_dt(rule: ShiftRule, day: date) -> datetime:
+    return grace_end_dt(rule, day)
 
 
 def classify(
@@ -35,17 +40,21 @@ def classify(
 ) -> AttendanceStatus:
     """Return the attendance status for one employee on one day.
 
-    - No punch yet and current time past absent cutoff: ABSENT
-    - No punch yet and within working window: UNKNOWN (too early to call)
-    - First punch within grace, or less than a full minute past it: PRESENT
-    - First punch a full minute or more past grace: LATE
+    - No punch yet and current time past grace: ABSENT (provisionally).
+    - No punch yet and within grace window: UNKNOWN (too early to call).
+    - First punch within grace, or less than a full minute past it: PRESENT.
+    - First punch a full minute or more past grace: LATE.
 
     Sub-minute lateness is treated as on-time. Otherwise we'd display
     "Late 0 min" rows for people who punched 30 seconds late, which reads as
     noise rather than signal.
     """
     if first_punch is None:
-        return AttendanceStatus.ABSENT if now >= absent_cutoff_dt(rule, day) else AttendanceStatus.UNKNOWN
+        return (
+            AttendanceStatus.ABSENT
+            if now >= grace_end_dt(rule, day)
+            else AttendanceStatus.UNKNOWN
+        )
 
     return AttendanceStatus.LATE if minutes_late(first_punch, rule, day) >= 1 else AttendanceStatus.PRESENT
 

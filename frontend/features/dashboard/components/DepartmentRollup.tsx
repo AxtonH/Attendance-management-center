@@ -42,19 +42,22 @@ export function DepartmentRollup({ date }: { date?: string }) {
 }
 
 function DepartmentRow({ row }: { row: DepartmentRollupItem }) {
+  const hasAbsent = row.absent > 0;
   const hasLate = row.late > 0;
+  // Absent is more severe than late, so a row with absents goes red even
+  // if it also has lates. Late-only stays orange. No flags → muted grey.
+  const tone = hasAbsent
+    ? "text-danger-text"
+    : hasLate
+      ? "text-warning-text"
+      : "text-text-tertiary";
   return (
     <li className="flex items-center justify-between py-[5px] text-[13px]">
       <span className="truncate pr-2 text-text-primary">{row.name}</span>
-      <span
-        className={`shrink-0 tabular-nums ${
-          hasLate ? "text-warning-text" : "text-text-tertiary"
-        }`}
-      >
+      <span className={`shrink-0 tabular-nums ${tone}`}>
         {row.present} / {row.expected}
-        {hasLate && (
-          <span> · {row.late} late</span>
-        )}
+        {hasAbsent && <span> · {row.absent} absent</span>}
+        {hasLate && <span> · {row.late} late</span>}
       </span>
     </li>
   );

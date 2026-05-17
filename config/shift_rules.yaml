@@ -4,8 +4,7 @@
 
 default_shift:
   start: "09:00"           # Local time (Asia/Amman). First punch at/after this is on-time.
-  grace_minutes: 15        # First punch within grace = on-time. After = late.
-  absent_after: "10:30"    # No punch by this time = absent.
+  grace_minutes: 15        # First punch within grace = on-time. After grace = late, and missing = absent.
   full_day_minutes: 480    # Expected workday length. Under this with both punches → incomplete-hours exception.
   wfh_weekdays: [3]        # Mon=0..Sun=6. Thursday is WFH for everyone (phase 2 placeholder; phase 3 will pull from Odoo).
 

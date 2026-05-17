@@ -75,6 +75,8 @@ def build_overview(
     Absent = 0 and Late = 0. Present still reflects whoever did punch.
     """
     is_wfh = day.weekday() in rule.wfh_weekdays
+    grace_end = shift_rules.grace_end_dt(rule, day)
+    past_grace = now >= grace_end
     first_punches = _first_punch_per_employee(punches)
     punched_codes = set(first_punches.keys())
 
@@ -83,7 +85,13 @@ def build_overview(
         if working_emp_codes is not None:
             roster_codes = roster_codes & working_emp_codes
         # WFH: nobody is "expected in office", so Absent collapses to 0.
-        absent: int | None = 0 if is_wfh else len(roster_codes - punched_codes)
+        # Pre-grace: same — they might still arrive. The tile only reports
+        # provisional absences once the grace window closes, matching the
+        # exceptions panel exactly (no more tile-vs-panel disagreement).
+        if is_wfh or not past_grace:
+            absent: int | None = 0
+        else:
+            absent = len(roster_codes - punched_codes)
     else:
         # Phase-1 universe = whoever appears in the active punch-derived list.
         roster_codes = frozenset(e.emp_code for e in employees if e.active)

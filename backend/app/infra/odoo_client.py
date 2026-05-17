@@ -92,12 +92,17 @@ class OdooClient:
         *,
         batch_size: int = 500,
         order: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Paged search_read. Returns the full result set as one list.
 
         Odoo accepts limit/offset on search_read; we walk the result set
         in `batch_size` chunks. The loop stops when a page comes back
         smaller than the batch size (no more rows).
+
+        `context` is passed through to Odoo. Use `{"active_test": False}`
+        to include archived/inactive records on models with an `active`
+        field — Odoo applies an implicit `active=True` filter otherwise.
         """
         results: list[dict[str, Any]] = []
         offset = 0
@@ -109,6 +114,8 @@ class OdooClient:
             }
             if order:
                 kwargs["order"] = order
+            if context:
+                kwargs["context"] = context
             page = self.execute_kw(model, "search_read", [domain], kwargs)
             if not page:
                 break

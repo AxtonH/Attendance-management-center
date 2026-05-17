@@ -33,11 +33,16 @@ class TestClassify:
     def test_late_much_later(self):
         assert classify(at(10, 45), RULE, DAY, now=at(11, 0)) == AttendanceStatus.LATE
 
-    def test_absent_when_no_punch_and_past_cutoff(self):
+    def test_absent_when_no_punch_and_past_grace_end(self):
+        # After grace ends (09:15) anyone without a punch is provisionally
+        # absent. If they show up later the count adjusts down automatically.
+        assert classify(None, RULE, DAY, now=at(9, 30)) == AttendanceStatus.ABSENT
         assert classify(None, RULE, DAY, now=at(10, 31)) == AttendanceStatus.ABSENT
 
-    def test_unknown_when_no_punch_and_before_cutoff(self):
-        assert classify(None, RULE, DAY, now=at(9, 30)) == AttendanceStatus.UNKNOWN
+    def test_unknown_when_no_punch_and_within_grace_window(self):
+        # Before grace ends we don't yet know — they might still arrive on time.
+        assert classify(None, RULE, DAY, now=at(9, 0)) == AttendanceStatus.UNKNOWN
+        assert classify(None, RULE, DAY, now=at(9, 14)) == AttendanceStatus.UNKNOWN
 
     def test_early_arrival_is_present(self):
         assert classify(at(8, 30), RULE, DAY, now=at(11, 0)) == AttendanceStatus.PRESENT

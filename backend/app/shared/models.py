@@ -46,7 +46,11 @@ class ShiftRule(BaseModel):
 
     start: str  # "HH:MM"
     grace_minutes: int
-    absent_after: str  # "HH:MM"
+    # NOTE: the legacy `absent_after` field is intentionally removed.
+    # Absent now triggers at `start + grace_minutes` — same threshold as
+    # late — so the tile and the exceptions panel agree. Kept for
+    # backwards-compat with old configs by simply accepting and ignoring.
+    absent_after: str | None = None
     # Expected workday length in minutes. Below this on a day with both
     # punches → incomplete-hours exception. Default = 8h.
     full_day_minutes: int = 480

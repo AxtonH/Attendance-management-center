@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from app.infra.calendar_parser import ALL_DAYS, parse_working_days
+from app.infra.calendar_parser import PREZLAB_DEFAULT_DAYS, parse_working_days
 from app.infra.odoo_client import OdooClient
 
 logger = logging.getLogger(__name__)
@@ -67,14 +67,19 @@ class OdooCalendarRepository:
     def working_days_for_calendar(self, calendar_id: int | None) -> frozenset[int]:
         """Set of working weekdays for the given calendar id.
 
-        - None / unknown id → caller decides the default; this method
-          returns the all-days fail-open set so the caller doesn't have
-          to special-case it. (Roster provider applies the "no calendar →
-          Prezlab default" rule separately.)
+        Unknown calendar ids fall back to the Prezlab default (Sun–Thu)
+        rather than all-7-days. Originally this was fail-OPEN to avoid
+        missing real absences, but in practice it caused the opposite
+        problem: people who came into the office on their day off were
+        getting flagged for incomplete-hours/missing-punch because the
+        defaulted calendar said Saturday was a workday. Prezlab default
+        is the right neutral assumption — covers the standard 90% case.
         """
         if calendar_id is None:
-            return ALL_DAYS
-        return self._get_cache().days_by_calendar.get(calendar_id, ALL_DAYS)
+            return PREZLAB_DEFAULT_DAYS
+        return self._get_cache().days_by_calendar.get(
+            calendar_id, PREZLAB_DEFAULT_DAYS
+        )
 
     def invalidate(self) -> None:
         with self._lock:
@@ -96,24 +101,36 @@ class OdooCalendarRepository:
             return cache
 
     def _fetch(self) -> _CacheEntry:
-        # Read every active calendar and its display name.
+        # active_test=False is critical here. Odoo applies an implicit
+        # `active=True` filter to any model with an `active` field, so
+        # without this we silently drop archived calendars — and employees
+        # CAN still be assigned to archived calendars (we saw exactly this
+        # cause Nour to get flagged on Saturday: his calendar id 4 was
+        # archived in Odoo, so it wasn't in our cache, so the lookup fell
+        # through to the all-days fallback and Saturday became a workday).
+        include_archived = {"active_test": False}
+
         calendars = self._client.search_read(
             CALENDAR_MODEL,
             [],
             ["id", NAME_FIELD],
             batch_size=self._batch_size,
+            context=include_archived,
         )
         names_by_id: dict[int, str] = {
             row["id"]: str(row.get(NAME_FIELD) or "") for row in calendars
         }
 
         # Read attendance rows (structured working-hour table). Odoo stores
-        # `dayofweek` as a string ("0".."6"), with Monday=0.
+        # `dayofweek` as a string ("0".."6"), with Monday=0. Same
+        # active_test=False — attendance rows can also be archived (and
+        # are auto-archived when their parent calendar is).
         attendance_rows = self._client.search_read(
             ATTENDANCE_MODEL,
             [],
             [CALENDAR_ID_FIELD, DAYOFWEEK_FIELD],
             batch_size=self._batch_size,
+            context=include_archived,
         )
         structured: dict[int, set[int]] = {}
         for row in attendance_rows:
