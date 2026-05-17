@@ -8,7 +8,7 @@ import { DateTabs } from "@/features/dashboard/components/DateTabs";
 import { DepartmentRollup } from "@/features/dashboard/components/DepartmentRollup";
 import { ExceptionsPanel } from "@/features/dashboard/components/ExceptionsPanel";
 import { PulseBar } from "@/features/dashboard/components/PulseBar";
-import { formatIsoFullDate } from "@/lib/format";
+import { formatIsoFullDate, formatWeekRange } from "@/lib/format";
 import { useDateParam } from "@/lib/useDateParam";
 import { useModeParam } from "@/lib/useModeParam";
 
@@ -44,7 +44,11 @@ function DashboardContent() {
                 : "Historic overview"}
           </small>
           <div className="mt-1 flex items-center gap-3">
-            <h1 className="text-[22px] font-medium">{formatIsoFullDate(date)}</h1>
+            <h1 className="text-[22px] font-medium">
+              {mode === "weekly"
+                ? formatWeekRange(date)
+                : formatIsoFullDate(date)}
+            </h1>
             <DatePickerButton />
           </div>
         </div>

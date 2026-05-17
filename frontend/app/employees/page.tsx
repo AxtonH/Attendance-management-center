@@ -6,7 +6,7 @@ import { DatePickerButton } from "@/components/ui/DatePickerButton";
 import { DateTabs } from "@/features/dashboard/components/DateTabs";
 import { EmployeesTable } from "@/features/employees/components/EmployeesTable";
 import { EmployeesWeekTable } from "@/features/employees/components/EmployeesWeekTable";
-import { formatIsoFullDate } from "@/lib/format";
+import { formatIsoFullDate, formatWeekRange } from "@/lib/format";
 import { useDateParam } from "@/lib/useDateParam";
 import { useModeParam } from "@/lib/useModeParam";
 
@@ -35,7 +35,11 @@ function EmployeesContent() {
                 : "Historic employees"}
           </small>
           <div className="mt-1 flex items-center gap-3">
-            <h1 className="text-[22px] font-medium">{formatIsoFullDate(date)}</h1>
+            <h1 className="text-[22px] font-medium">
+              {mode === "weekly"
+                ? formatWeekRange(date)
+                : formatIsoFullDate(date)}
+            </h1>
             <DatePickerButton />
           </div>
         </div>

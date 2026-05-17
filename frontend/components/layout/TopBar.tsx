@@ -13,9 +13,11 @@ const NAV = [
 export function TopBar() {
   const pathname = usePathname();
   const params = useSearchParams();
-  // Carry ?date across tabs so a historic view persists when switching pages.
-  const date = params.get("date");
-  const suffix = date ? `?date=${date}` : "";
+  // Carry the current view state across tabs. ?date= keeps a historic
+  // view when switching pages; ?mode= keeps weekly/daily so the user
+  // isn't kicked back to daily on the new page.
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
 
   return (
     <div className="flex items-center justify-between bg-bg-dark px-10 py-[18px] text-text-on-dark">

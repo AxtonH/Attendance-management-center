@@ -30,17 +30,28 @@ export function useDateParam(): {
   const setDate = useCallback(
     (next: string | Date) => {
       const iso = typeof next === "string" ? next : toIso(next);
-      const url = iso === today
-        ? pathname
-        : `${pathname}?date=${iso}`;
-      router.push(url, { scroll: false });
+      // Preserve every other search param (notably ?mode=weekly) so that
+      // changing the date while in weekly view doesn't drop the user back
+      // to daily. Only the `date` param is mutated here.
+      const sp = new URLSearchParams(params.toString());
+      if (iso === today) {
+        sp.delete("date");
+      } else {
+        sp.set("date", iso);
+      }
+      const qs = sp.toString();
+      router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
-    [pathname, router, today],
+    [params, pathname, router, today],
   );
 
   const clear = useCallback(() => {
-    router.push(pathname, { scroll: false });
-  }, [pathname, router]);
+    // Same preservation rule: clearing the date keeps any other params.
+    const sp = new URLSearchParams(params.toString());
+    sp.delete("date");
+    const qs = sp.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [params, pathname, router]);
 
   return useMemo(
     () => ({ date, isToday: date === today, setDate, clear }),
