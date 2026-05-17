@@ -194,3 +194,52 @@ class TestPreviousWorkingDay:
         # within the first PAGE_SIZE rows of the DESC scan.
         assert client.last_query is not None
         assert len(client.last_query.calls) == 1
+
+
+class TestPunchesGroupedByDay:
+    def test_returns_one_bucket_per_day_in_range(self):
+        rows = [
+            _row("1001", datetime(2026, 5, 10, 9, 0), tid=1),
+            _row("1002", datetime(2026, 5, 12, 9, 5), tid=2),
+            _row("1001", datetime(2026, 5, 12, 17, 30), tid=3),
+            _row("1003", datetime(2026, 5, 16, 8, 45), tid=4),
+        ]
+        repo = PunchRepository(_FakeClient(rows))  # type: ignore[arg-type]
+        result = repo.punches_grouped_by_day(
+            date(2026, 5, 10), date(2026, 5, 16)
+        )
+        # All 7 days present, even those with no punches.
+        assert set(result.keys()) == {
+            date(2026, 5, d) for d in range(10, 17)
+        }
+        assert len(result[date(2026, 5, 10)]) == 1
+        assert len(result[date(2026, 5, 11)]) == 0  # quiet day
+        assert len(result[date(2026, 5, 12)]) == 2  # two punches grouped together
+        assert len(result[date(2026, 5, 16)]) == 1
+
+    def test_uses_a_single_paginated_query(self):
+        # Even with many rows spanning the week, we expect one logical query
+        # (possibly multiple pages within it — but only via .range() calls).
+        rows = [
+            _row(f"E{i:03d}", datetime(2026, 5, 10 + (i % 7), 9, 0), tid=i)
+            for i in range(50)
+        ]
+        client = _FakeClient(rows)
+        repo = PunchRepository(client)  # type: ignore[arg-type]
+        repo.punches_grouped_by_day(date(2026, 5, 10), date(2026, 5, 16))
+        assert client.last_query is not None
+        # Single page expected — under 1000 rows.
+        assert len(client.last_query.calls) == 1
+
+    def test_paginates_when_over_page_size(self):
+        # Ensure pagination kicks in: getting all rows back when there are
+        # more than PAGE_SIZE proves the loop ran past one page.
+        rows = [
+            _row(f"E{i:04d}", datetime(2026, 5, 10, 9, 0), tid=i)
+            for i in range(PAGE_SIZE + 100)
+        ]
+        repo = PunchRepository(_FakeClient(rows))  # type: ignore[arg-type]
+        result = repo.punches_grouped_by_day(
+            date(2026, 5, 10), date(2026, 5, 16)
+        )
+        assert len(result[date(2026, 5, 10)]) == PAGE_SIZE + 100

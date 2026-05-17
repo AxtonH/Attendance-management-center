@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Panel, PanelHeader } from "@/components/ui/Panel";
 
-import { useExceptions } from "../queries";
+import { useExceptions, type DashboardMode } from "../queries";
 import type { ExceptionItem, FilterType } from "../types";
 
 const FILTERS: { value: FilterType; label: string }[] = [
@@ -15,17 +15,13 @@ const FILTERS: { value: FilterType; label: string }[] = [
   { value: "late", label: "Late" },
 ];
 
-// Subtitle copy per filter chip. Singular form lives next to its plural so
-// 1-vs-N grammar stays in one table.
-const SUBTITLE: Record<
-  FilterType,
-  { singular: string; plural: string }
-> = {
+type SubtitleCopy = { singular: string; plural: string };
+
+// Subtitle copy per filter chip, per mode. "today"/"yesterday" framing
+// matches the daily query; the weekly variant says "this week".
+const SUBTITLE_DAILY: Record<FilterType, SubtitleCopy> = {
   all: { singular: "violation flagged today", plural: "violations flagged today" },
-  absent: {
-    singular: "absent Prezlaber today",
-    plural: "absent Prezlabers today",
-  },
+  absent: { singular: "absent Prezlaber today", plural: "absent Prezlabers today" },
   missing_punch: {
     singular: "Prezlaber missing a punch yesterday",
     plural: "Prezlabers missing a punch yesterday",
@@ -34,24 +30,51 @@ const SUBTITLE: Record<
     singular: "Prezlaber short on hours yesterday",
     plural: "Prezlabers short on hours yesterday",
   },
-  late: {
-    singular: "late Prezlaber today",
-    plural: "late Prezlabers today",
-  },
+  late: { singular: "late Prezlaber today", plural: "late Prezlabers today" },
   review: { singular: "Prezlaber to review", plural: "Prezlabers to review" },
+};
+
+const SUBTITLE_WEEKLY: Record<FilterType, SubtitleCopy> = {
+  all: { singular: "violation this week", plural: "violations this week" },
+  absent: {
+    singular: "Prezlaber absent this week",
+    plural: "Prezlabers absent this week",
+  },
+  missing_punch: {
+    singular: "Prezlaber missing a punch this week",
+    plural: "Prezlabers missing a punch this week",
+  },
+  incomplete_hours: {
+    singular: "Prezlaber short on hours this week",
+    plural: "Prezlabers short on hours this week",
+  },
+  late: {
+    singular: "Prezlaber late this week",
+    plural: "Prezlabers late this week",
+  },
+  review: {
+    singular: "Prezlaber to review this week",
+    plural: "Prezlabers to review this week",
+  },
 };
 
 const PAGE_SIZE = 6;
 
-export function ExceptionsPanel({ date }: { date?: string }) {
+export function ExceptionsPanel({
+  date,
+  mode = "daily",
+}: {
+  date?: string;
+  mode?: DashboardMode;
+}) {
   const [filter, setFilter] = useState<FilterType>("all");
   const [expanded, setExpanded] = useState(false);
-  const { data, isLoading } = useExceptions(date);
+  const { data, isLoading } = useExceptions(date, mode);
   const allItems = data?.items ?? [];
   const items = filter === "all" ? allItems : allItems.filter((i) => i.tag === filter);
   const visible = expanded ? items : items.slice(0, PAGE_SIZE);
 
-  const subtitleCopy = SUBTITLE[filter];
+  const subtitleCopy = (mode === "weekly" ? SUBTITLE_WEEKLY : SUBTITLE_DAILY)[filter];
   const subtitle = `${items.length} ${
     items.length === 1 ? subtitleCopy.singular : subtitleCopy.plural
   }`;
@@ -117,6 +140,10 @@ function ExceptionRow({ item }: { item: ExceptionItem }) {
         ? "bg-severity-med"
         : "bg-severity-low";
 
+  // Weekly rows carry a `days` list (e.g. ["Mon", "Wed"]). Daily rows
+  // don't, so the chip row is hidden entirely.
+  const dayChips = item.days && item.days.length > 0 ? item.days : null;
+
   return (
     <div className="flex cursor-pointer items-center gap-[14px] border-b border-border px-[18px] py-[14px] transition-colors hover:bg-bg-subtle">
       <div className={`h-[6px] w-[6px] shrink-0 rounded-full ${dotColor}`} />
@@ -127,9 +154,21 @@ function ExceptionRow({ item }: { item: ExceptionItem }) {
             · {item.department}
           </span>
         </p>
-        <p className="m-0 mt-[2px] text-[12px] text-text-secondary">
-          {item.detail}
-        </p>
+        <div className="mt-[2px] flex flex-wrap items-center gap-[6px] text-[12px] text-text-secondary">
+          <span>{item.detail}</span>
+          {dayChips && (
+            <span className="flex flex-wrap gap-[4px]">
+              {dayChips.map((d) => (
+                <span
+                  key={d}
+                  className="rounded bg-bg-muted px-[6px] py-[1px] text-[10px] font-medium text-text-secondary"
+                >
+                  {d}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
       </div>
       <Tag tag={item.tag} />
     </div>

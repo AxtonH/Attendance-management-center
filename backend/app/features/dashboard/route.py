@@ -30,6 +30,8 @@ from app.features.dashboard.service import (
     build_exceptions,
     build_overview,
 )
+from app.features.dashboard.weekly import build_weekly_dashboard
+from app.shared.date_range import iter_days, week_range_for
 
 router = APIRouter(tags=["dashboard"])
 
@@ -37,13 +39,27 @@ FilterType = Literal[
     "all", "late", "absent", "missing_punch", "incomplete_hours", "review"
 ]
 
+Mode = Literal["daily", "weekly"]
+
 
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(
     day: date = Depends(parse_date),
     now: datetime = Depends(now_in_tz),
+    mode: Mode = Query(default="daily"),
     roster: RosterProvider = Depends(get_roster),
     repo: PunchRepository = Depends(get_punch_repo),
+) -> DashboardResponse:
+    if mode == "weekly":
+        return _build_weekly(day, now, roster, repo)
+    return _build_daily(day, now, roster, repo)
+
+
+def _build_daily(
+    day: date,
+    now: datetime,
+    roster: RosterProvider,
+    repo: PunchRepository,
 ) -> DashboardResponse:
     punches = repo.punches_for_day(day)
     prev_day, prev_punches = repo.punches_for_previous_working_day(day)
@@ -65,6 +81,50 @@ def dashboard(
         department_by_emp_code=roster.department_by_emp_code(),
         prev_working_day=prev_day,
         prev_working_day_punches=prev_punches,
+    )
+
+
+def _build_weekly(
+    day: date,
+    now: datetime,
+    roster: RosterProvider,
+    repo: PunchRepository,
+) -> DashboardResponse:
+    start, end = week_range_for(day)
+    days = iter_days(start, end)
+
+    # One paginated Supabase round-trip for the whole week. The grouping
+    # happens in memory so the aggregator doesn't re-query per day.
+    punches_by_day = repo.punches_grouped_by_day(start, end)
+
+    # Day-before-range: needed so missing-punch and incomplete-hours
+    # detectors can look "back" from the first day in the range.
+    prev_day, prev_punches = repo.punches_for_previous_working_day(start)
+
+    # The aggregator wants `employees` for name/department lookups when
+    # the Odoo roster doesn't have a code — flatten all the week's punches
+    # so the punch-derived list covers everyone who appeared at least once.
+    all_punches = [p for plist in punches_by_day.values() for p in plist]
+    employees = roster.employees_from_punches(all_punches)
+
+    working_by_day = {
+        d: roster.working_emp_codes_for(d) for d in days
+    }
+    if prev_day is not None:
+        working_by_day[prev_day] = roster.working_emp_codes_for(prev_day)
+
+    return build_weekly_dashboard(
+        employees=employees,
+        punches_by_day=punches_by_day,
+        rule=roster.default_shift(),
+        days=days,
+        now=now,
+        expected_emp_codes=roster.expected_emp_codes(),
+        roster_names=roster.display_names(),
+        department_by_emp_code=roster.department_by_emp_code(),
+        working_emp_codes_by_day=working_by_day,
+        prev_day_before_range=prev_day,
+        prev_day_before_range_punches=prev_punches,
     )
 
 

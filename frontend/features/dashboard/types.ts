@@ -29,6 +29,9 @@ export const exceptionItemSchema = z.object({
   severity: exceptionSeverity,
   tag: exceptionTag,
   detail: z.string(),
+  // Weekly view only: short weekday labels ("Mon", "Wed") on which this
+  // exception fired. Absent/null in daily view = single-day flag.
+  days: z.array(z.string()).nullable().optional(),
 });
 export type ExceptionItem = z.infer<typeof exceptionItemSchema>;
 
@@ -69,6 +72,12 @@ export type Arrivals = z.infer<typeof arrivalsSchema>;
 
 export const dashboardSchema = z.object({
   date: z.string(),
+  // Required — backend always sends it. Keeping it required gives a clean
+  // Dashboard type with `mode: "daily" | "weekly"` and avoids the
+  // unknown-leak from .default/.catch under zod 3.23's input inference.
+  mode: z.enum(["daily", "weekly"]),
+  range_start: z.string().nullable().optional(),
+  range_end: z.string().nullable().optional(),
   overview: overviewSchema,
   exceptions: exceptionsSchema,
   arrivals: arrivalsSchema,

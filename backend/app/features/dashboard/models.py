@@ -46,6 +46,10 @@ class ExceptionItem(BaseModel):
     severity: ExceptionSeverity
     tag: ExceptionTag
     detail: str = Field(..., description="Human-readable explanation, e.g. 'Late 18 min'")
+    # Populated only in weekly view: the weekday labels on which this
+    # exception fired (e.g. ["Mon", "Wed", "Thu"]). None in daily view so
+    # the field's absence in the response means "single-day flag".
+    days: list[str] | None = None
 
 
 class ExceptionsResponse(BaseModel):
@@ -94,9 +98,16 @@ class DashboardResponse(BaseModel):
 
     Exists alongside the individual /api/* endpoints; those stay for
     single-panel refreshes and debugging.
+
+    In weekly mode, `date` is the anchor day the user selected; the
+    response covers the Sunday–Saturday week containing it. `range_start`
+    and `range_end` are populated only in weekly mode.
     """
 
     date: str
+    mode: str = "daily"  # "daily" | "weekly"
+    range_start: str | None = None
+    range_end: str | None = None
     overview: OverviewResponse
     exceptions: ExceptionsResponse
     arrivals: ArrivalsResponse

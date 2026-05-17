@@ -36,6 +36,31 @@ class PunchRepository:
         end = start + timedelta(days=1)
         return self._punches_between(start, end)
 
+    def punches_grouped_by_day(
+        self, start: date, end: date
+    ) -> dict[date, list[Punch]]:
+        """All punches in [start, end] (inclusive), grouped by local date.
+
+        One paginated round-trip covers the whole week. The grouping happens
+        in memory once, so the weekly aggregators below get O(1) per-day
+        lookups without re-querying. Days with no punches return an empty
+        list rather than being missing from the dict — keeps the consumer
+        loop branch-free.
+        """
+        range_start = datetime.combine(start, time.min)
+        range_end = datetime.combine(end + timedelta(days=1), time.min)
+        by_day: dict[date, list[Punch]] = {}
+        # Pre-seed every day in the range so callers can iterate without
+        # `.get(d, [])` everywhere — small clarity win for the aggregators.
+        cursor = start
+        while cursor <= end:
+            by_day[cursor] = []
+            cursor += timedelta(days=1)
+        for page in self._iter_pages_between(range_start, range_end, desc=False):
+            for p in page:
+                by_day[p.punch_time.date()].append(p)
+        return by_day
+
     def punches_for_previous_working_day(
         self,
         day: date,

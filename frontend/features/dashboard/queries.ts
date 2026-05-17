@@ -16,34 +16,39 @@ import type {
 // what BioTime can push (every 5 min).
 const POLL_MS = 60_000;
 
+export type DashboardMode = "daily" | "weekly";
+
 function useDashboardSelector<T>(
   date: string | undefined,
+  mode: DashboardMode,
   select: (d: Dashboard) => T,
 ) {
   return useQuery({
-    queryKey: ["dashboard", date],
-    queryFn: () => getDashboard(date),
+    // mode is part of the key so flipping the tab triggers a fresh fetch
+    // and doesn't show stale daily data while weekly is loading.
+    queryKey: ["dashboard", date, mode],
+    queryFn: () => getDashboard(date, mode),
     refetchInterval: POLL_MS,
     select,
   });
 }
 
-export function useDashboard(date?: string) {
-  return useDashboardSelector(date, (d) => d);
+export function useDashboard(date?: string, mode: DashboardMode = "daily") {
+  return useDashboardSelector(date, mode, (d) => d);
 }
 
-export function useOverview(date?: string) {
-  return useDashboardSelector(date, (d): Overview => d.overview);
+export function useOverview(date?: string, mode: DashboardMode = "daily") {
+  return useDashboardSelector(date, mode, (d): Overview => d.overview);
 }
 
-export function useExceptions(date?: string) {
-  return useDashboardSelector(date, (d): Exceptions => d.exceptions);
+export function useExceptions(date?: string, mode: DashboardMode = "daily") {
+  return useDashboardSelector(date, mode, (d): Exceptions => d.exceptions);
 }
 
-export function useArrivals(date?: string) {
-  return useDashboardSelector(date, (d): Arrivals => d.arrivals);
+export function useArrivals(date?: string, mode: DashboardMode = "daily") {
+  return useDashboardSelector(date, mode, (d): Arrivals => d.arrivals);
 }
 
-export function useDepartments(date?: string) {
-  return useDashboardSelector(date, (d): Departments => d.departments);
+export function useDepartments(date?: string, mode: DashboardMode = "daily") {
+  return useDashboardSelector(date, mode, (d): Departments => d.departments);
 }

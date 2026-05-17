@@ -11,16 +11,24 @@ import type { TooltipContentProps } from "recharts";
 
 import { SidePanel } from "@/components/ui/Panel";
 
-import { useArrivals } from "../queries";
+import { useArrivals, type DashboardMode } from "../queries";
 
 const ACCENT = "#4F46E5"; // matches --accent token
 
-export function ArrivalHistogram({ date }: { date?: string }) {
-  const { data } = useArrivals(date);
+export function ArrivalHistogram({
+  date,
+  mode = "daily",
+}: {
+  date?: string;
+  mode?: DashboardMode;
+}) {
+  const { data } = useArrivals(date, mode);
   const buckets = data?.buckets ?? [];
 
   return (
-    <SidePanel label="Today's arrival pattern">
+    <SidePanel
+      label={mode === "weekly" ? "Average arrival pattern" : "Today's arrival pattern"}
+    >
       {/* flex-1 grows the chart to fill whatever vertical space the
           grid hands the panel — keeps it the same height as the
           department rollup next door. min-h-0 is the standard fix that

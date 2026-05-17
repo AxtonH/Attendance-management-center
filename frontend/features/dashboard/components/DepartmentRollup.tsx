@@ -2,11 +2,17 @@
 
 import { SidePanel } from "@/components/ui/Panel";
 
-import { useDepartments } from "../queries";
+import { useDepartments, type DashboardMode } from "../queries";
 import type { DepartmentRollup as DepartmentRollupItem } from "../types";
 
-export function DepartmentRollup({ date }: { date?: string }) {
-  const { data, isLoading } = useDepartments(date);
+export function DepartmentRollup({
+  date,
+  mode = "daily",
+}: {
+  date?: string;
+  mode?: DashboardMode;
+}) {
+  const { data, isLoading } = useDepartments(date, mode);
   const rows = data?.departments ?? [];
 
   // Empty list → either Odoo isn't configured (phase-1 mode) or every
