@@ -64,13 +64,13 @@ def build_weekly_overview(
     expected_emp_codes: frozenset[str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
 ) -> OverviewResponse:
-    """Sum the per-day Present/Late/Absent counts across the week.
+    """Aggregate Present/Late/Absent across the week.
 
-    Tile semantics = person-days. One employee late on three days
-    contributes 3 to Late. Weekend days (off for everyone in the working
-    set) and WFH days contribute 0 by construction — same gates as daily.
+    - Present = distinct employees who showed up at least once in the week.
+      One Prezlaber who came in 4 days still counts as 1.
+    - Late and Absent = person-day sums (one person late on 3 days = 3).
     """
-    total_present = 0
+    present_codes: set[str] = set()
     total_late = 0
     total_absent = 0
 
@@ -89,9 +89,8 @@ def build_weekly_overview(
         else:
             roster = punched  # phase-1 fallback
 
-        # Present: everyone in the day's roster who punched.
-        day_present = len(roster & punched)
-        total_present += day_present
+        # Present: accumulate distinct codes across the whole week.
+        present_codes |= roster & punched
 
         # Late and Absent both suppressed on WFH days and during the
         # grace window (no provisional flags before grace_end).
@@ -110,7 +109,7 @@ def build_weekly_overview(
 
     return OverviewResponse(
         date=days[0].isoformat(),
-        present=total_present,
+        present=len(present_codes),
         late=total_late,
         absent=total_absent if expected_emp_codes is not None else None,
     )

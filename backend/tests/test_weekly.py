@@ -60,8 +60,9 @@ def _empty_week() -> dict[date, list[Punch]]:
 
 
 class TestWeeklyOverview:
-    def test_present_sums_person_days_across_week(self):
-        # 1001 punches Sun, Mon, Tue. 1002 punches Sun only. → present = 4.
+    def test_present_counts_distinct_people_not_person_days(self):
+        # 1001 punches Sun, Mon, Tue (3 days). 1002 punches Sun only.
+        # Present = 2 distinct people, NOT 4 person-days.
         punches = _empty_week()
         punches[date(2026, 5, 10)] = [
             _punch("1001", date(2026, 5, 10), 9, 0, 1),
@@ -76,7 +77,7 @@ class TestWeeklyOverview:
             NOW,
             expected_emp_codes=frozenset({"1001", "1002"}),
         )
-        assert result.present == 4
+        assert result.present == 2
 
     def test_late_counts_each_late_day(self):
         # 1001 late twice (Sun, Mon), on time Tue. → late = 2.
