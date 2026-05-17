@@ -16,3 +16,31 @@ export const employeesTodaySchema = z.object({
   rows: z.array(employeeDaySchema),
 });
 export type EmployeesToday = z.infer<typeof employeesTodaySchema>;
+
+// Weekly view: one parent row per employee with N child rows for the
+// days they punched. Mirrors backend EmployeesWeekResponse.
+export const employeeWeekDaySchema = z.object({
+  date: z.string(),  // ISO YYYY-MM-DD
+  punch_in: z.string(),
+  punch_out: z.string().nullable(),
+  worked_minutes: z.number().int().nonnegative().nullable(),
+});
+export type EmployeeWeekDay = z.infer<typeof employeeWeekDaySchema>;
+
+export const employeeWeekSchema = z.object({
+  emp_code: z.string(),
+  name: z.string(),
+  days_worked: z.number().int().nonnegative(),
+  expected_days: z.number().int().nonnegative(),
+  total_worked_minutes: z.number().int().nonnegative(),
+  expected_minutes: z.number().int().nonnegative(),
+  days: z.array(employeeWeekDaySchema),
+});
+export type EmployeeWeek = z.infer<typeof employeeWeekSchema>;
+
+export const employeesWeekSchema = z.object({
+  range_start: z.string(),
+  range_end: z.string(),
+  rows: z.array(employeeWeekSchema),
+});
+export type EmployeesWeek = z.infer<typeof employeesWeekSchema>;

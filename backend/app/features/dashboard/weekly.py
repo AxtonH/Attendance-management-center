@@ -128,17 +128,28 @@ def build_weekly_departments_rollup(
     expected_emp_codes: frozenset[str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
 ) -> DepartmentsResponse:
-    """Per-department person-day totals across the week.
+    """Per-department weekly rollup.
 
-    Same per-day math as `build_departments_rollup`, summed. Empty
-    departments (zero expected across the whole week) are dropped.
-    Sort: worst-first — most absent, then most late, then name.
+    - `expected` = distinct people scheduled at least one day this week.
+    - `present`  = distinct people who showed up at least one day this week.
+    - `late` / `absent` = person-day sums (one person late twice = 2).
+
+    The "X / Y" tile reading is now "distinct people who showed up out of
+    distinct people who work in this department this week" — not a sum of
+    per-day scheduled slots. Sort: most absences first (person-days),
+    then most lates, then name.
     """
     if not department_by_emp_code or expected_emp_codes is None:
         return DepartmentsResponse(date=days[0].isoformat(), departments=[])
 
-    # dept_name → [expected, present, late, absent]
-    buckets: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    # Per-department state. Sets get unioned across days, ints summed.
+    expected_people: dict[str, set[str]] = defaultdict(set)
+    present_people: dict[str, set[str]] = defaultdict(set)
+    late_pdays: dict[str, int] = defaultdict(int)
+    absent_pdays: dict[str, int] = defaultdict(int)
+
+    def dept_of(code: str) -> str:
+        return department_by_emp_code.get(code) or "Unassigned"
 
     for day in days:
         is_wfh = day.weekday() in rule.wfh_weekdays
@@ -153,27 +164,30 @@ def build_weekly_departments_rollup(
             roster = roster & working
 
         for code in roster:
-            dept = department_by_emp_code.get(code) or "Unassigned"
-            slot = buckets[dept]
-            slot[0] += 1  # expected (person-day)
+            dept = dept_of(code)
+            expected_people[dept].add(code)
             if code in punched:
-                slot[1] += 1
+                present_people[dept].add(code)
                 if not is_wfh:
                     first = first_punches[code]
                     if (
                         shift_rules.classify(first, rule, day, now=now)
                         == AttendanceStatus.LATE
                     ):
-                        slot[2] += 1
+                        late_pdays[dept] += 1
             elif not is_wfh and now >= shift_rules.grace_end_dt(rule, day):
-                slot[3] += 1
+                absent_pdays[dept] += 1
 
     rows = [
         DepartmentRollup(
-            name=name, expected=exp, present=pre, late=lt, absent=ab
+            name=name,
+            expected=len(expected_people[name]),
+            present=len(present_people[name]),
+            late=late_pdays[name],
+            absent=absent_pdays[name],
         )
-        for name, (exp, pre, lt, ab) in buckets.items()
-        if exp > 0
+        for name in expected_people
+        if expected_people[name]
     ]
     rows.sort(key=lambda r: (-r.absent, -r.late, r.name.lower()))
     return DepartmentsResponse(date=days[0].isoformat(), departments=rows)
@@ -259,8 +273,6 @@ def build_weekly_exceptions(
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
-    prev_day_before_range: date | None = None,
-    prev_day_before_range_punches: list[Punch] | None = None,
 ) -> ExceptionsResponse:
     """Run every per-day detector across the week, then group by (tag, emp_code).
 
@@ -331,58 +343,57 @@ def build_weekly_exceptions(
             ),
             day,
         )
-        # Prev-day-style detectors need yesterday's punches. For day 0 of
-        # the range that's prev_day_before_range_punches; for later days
-        # it's the punches we already have for day - 1.
+        # Prev-day detectors look at *yesterday's* timesheet. In weekly
+        # view we report under the actual broken day (so chips match the
+        # data), and we only fire when that day is inside the week being
+        # rendered — otherwise the chip "Sat" would ambiguously read as
+        # this week's Saturday when it actually means last week's. The
+        # flag will surface in the previous week's view instead.
         prev_day = day - timedelta(days=1)
-        if prev_day in punches_by_day:
-            prev_punches = punches_by_day[prev_day]
-        elif prev_day_before_range is not None and prev_day == prev_day_before_range:
-            prev_punches = prev_day_before_range_punches or []
-        else:
-            prev_punches = []
-        working_prev = (
-            working_emp_codes_by_day.get(prev_day)
-            if working_emp_codes_by_day
-            else None
-        )
-        absorb(
-            detect_prev_day_missing_punch(
-                employees,
-                prev_punches,
+        if prev_day >= days[0]:
+            prev_punches = punches_by_day.get(prev_day, [])
+            working_prev = (
+                working_emp_codes_by_day.get(prev_day)
+                if working_emp_codes_by_day
+                else None
+            )
+            absorb(
+                detect_prev_day_missing_punch(
+                    employees,
+                    prev_punches,
+                    prev_day,
+                    expected_emp_codes=expected_emp_codes,
+                    roster_names=roster_names,
+                    working_emp_codes_prev_day=working_prev,
+                    wfh_weekdays=rule.wfh_weekdays,
+                ),
                 prev_day,
-                expected_emp_codes=expected_emp_codes,
-                roster_names=roster_names,
-                working_emp_codes_prev_day=working_prev,
-                wfh_weekdays=rule.wfh_weekdays,
-            ),
-            # Report under the *day we noticed*, not the day with the bad
-            # timesheet. So the chip shows the day a manager would chase it.
-            day,
-        )
-        absorb(
-            detect_prev_day_incomplete_hours(
-                employees,
-                prev_punches,
+            )
+            absorb(
+                detect_prev_day_incomplete_hours(
+                    employees,
+                    prev_punches,
+                    prev_day,
+                    rule,
+                    expected_emp_codes=expected_emp_codes,
+                    roster_names=roster_names,
+                    working_emp_codes_prev_day=working_prev,
+                ),
                 prev_day,
-                rule,
-                expected_emp_codes=expected_emp_codes,
-                roster_names=roster_names,
-                working_emp_codes_prev_day=working_prev,
-            ),
-            day,
-        )
+            )
 
     allowed = _FILTER_TAGS.get(filter_type, set())
     items: list[ExceptionItem] = []
     for (tag, emp_code), entry in grouped.items():
         if tag not in allowed:
             continue
-        # Detail line: when an employee was late multiple times, surface
-        # the count rather than concatenating per-day strings (which would
-        # quickly become noise).
+        # Detail line: always summarized in weekly view. The daily
+        # detectors append "today"/"on DD-MM-YYYY" text that reads wrong
+        # here (the day chips on the row already convey *when*), so we
+        # synthesize a clean weekly-tense string instead.
         n = len(entry["days"])
-        detail = entry["details"][0] if n == 1 else f"{n}× {_tag_label(tag)}"
+        label = _tag_label(tag).capitalize()
+        detail = label if n == 1 else f"{n}× {label.lower()}"
         items.append(
             ExceptionItem(
                 emp_code=emp_code,
@@ -419,8 +430,6 @@ def build_weekly_dashboard(
     roster_names: Mapping[str, str] | None = None,
     department_by_emp_code: Mapping[str, str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
-    prev_day_before_range: date | None = None,
-    prev_day_before_range_punches: list[Punch] | None = None,
     arrival_bucket_minutes: int = 15,
     arrival_window_start: str = "07:30",
 ) -> DashboardResponse:
@@ -434,8 +443,6 @@ def build_weekly_dashboard(
         expected_emp_codes=expected_emp_codes,
         roster_names=roster_names,
         working_emp_codes_by_day=working_emp_codes_by_day,
-        prev_day_before_range=prev_day_before_range,
-        prev_day_before_range_punches=prev_day_before_range_punches,
     )
     arrivals = build_weekly_arrivals(
         punches_by_day, days,

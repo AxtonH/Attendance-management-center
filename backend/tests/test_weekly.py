@@ -141,7 +141,17 @@ class TestWeeklyOverview:
 
 
 class TestWeeklyDepartmentsRollup:
-    def test_sums_person_days_per_department(self):
+    def test_present_and_expected_are_distinct_people(self):
+        # Design has two people (1001, 1002). 1001 punches Sun + Mon (twice),
+        # 1002 punches Sun (once, late). Expected/Present must count people,
+        # not person-days: Design = 2 / 2. Late stays as a person-day sum
+        # → 1 (1002's single late punch).
+        only_sun_mon = {
+            d: frozenset({"1001", "1002", "1003"})
+            if d.weekday() in (6, 0)  # Sun, Mon
+            else frozenset()
+            for d in WEEK_DAYS
+        }
         punches = _empty_week()
         punches[date(2026, 5, 10)] = [
             _punch("1001", date(2026, 5, 10), 9, 0, 1),
@@ -158,14 +168,19 @@ class TestWeeklyDepartmentsRollup:
             NOW,
             dept_map,
             expected_emp_codes=frozenset({"1001", "1002", "1003"}),
+            working_emp_codes_by_day=only_sun_mon,
         )
         by_name = {r.name: r for r in result.departments}
-        # Design: 3 people-days expected (1001×2 + 1002×2 across 2 working
-        # days = depends on day weekday). With no working filter passed,
-        # universe = full Odoo roster for every day. Strategy: same.
-        assert "Design" in by_name
-        assert by_name["Design"].present >= 3
-        assert by_name["Design"].late >= 1  # 1002 was late on Sun
+        # Distinct people, not person-days:
+        assert by_name["Design"].expected == 2
+        assert by_name["Design"].present == 2
+        # 1002 was late once → person-day sum = 1.
+        assert by_name["Design"].late == 1
+        # Strategy: 1003 never punched.
+        assert by_name["Strategy"].expected == 1
+        assert by_name["Strategy"].present == 0
+        # 1003 scheduled 2 days, never showed up → 2 absent person-days.
+        assert by_name["Strategy"].absent == 2
 
     def test_sort_worst_first_includes_absent_weight(self):
         # Two scheduled workdays for everyone (Sun, Mon).
@@ -250,11 +265,14 @@ class TestWeeklyExceptions:
         row = late_rows[0]
         assert row.emp_code == "1001"
         assert sorted(row.days or []) == ["Mon", "Sun"]
-        # Multi-occurrence detail uses count form, not the per-day string.
+        # Multi-occurrence detail uses count form, not the daily per-day string.
         assert "2×" in row.detail
+        assert "today" not in row.detail.lower()
 
-    def test_single_occurrence_keeps_original_detail(self):
-        # One late day → detail should be the single-day "Late N min" string.
+    def test_single_occurrence_uses_summarized_label(self):
+        # One late day in weekly view: detail is the clean weekly label
+        # ("Late"), not the daily detector's "Late N min ... today" string.
+        # The day chip already communicates *when*.
         punches = _empty_week()
         punches[date(2026, 5, 10)] = [_punch("1001", date(2026, 5, 10), 9, 30, 1)]
         result = build_weekly_exceptions(
@@ -268,8 +286,33 @@ class TestWeeklyExceptions:
         )
         late_rows = [i for i in result.items if i.tag == ExceptionTag.LATE]
         assert len(late_rows) == 1
-        assert late_rows[0].detail.startswith("Late ")
+        assert late_rows[0].detail == "Late"
         assert late_rows[0].days == ["Sun"]
+
+    def test_single_absent_does_not_say_no_punch_today(self):
+        # Regression: with the daily detector's "No punch today" string,
+        # a single absent row in weekly view would read confusingly as
+        # "No punch today [Sat]" — both "today" and the day chip showing.
+        # The weekly aggregator must synthesize a tense-clean label.
+        only_sat = {
+            d: frozenset({"1001"}) if d.weekday() == 5 else frozenset()
+            for d in WEEK_DAYS
+        }
+        result = build_weekly_exceptions(
+            employees=[_emp("1001")],
+            punches_by_day=_empty_week(),
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "K"},
+            working_emp_codes_by_day=only_sat,
+        )
+        absent_rows = [i for i in result.items if i.tag == ExceptionTag.ABSENT]
+        assert len(absent_rows) == 1
+        assert "today" not in absent_rows[0].detail.lower()
+        assert "No punch" not in absent_rows[0].detail
+        assert absent_rows[0].days == ["Sat"]
 
     def test_filter_late_excludes_other_tags(self):
         # Mix of absent + late in the same week → filter pulls just lates.

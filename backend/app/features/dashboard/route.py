@@ -97,21 +97,13 @@ def _build_weekly(
     # happens in memory so the aggregator doesn't re-query per day.
     punches_by_day = repo.punches_grouped_by_day(start, end)
 
-    # Day-before-range: needed so missing-punch and incomplete-hours
-    # detectors can look "back" from the first day in the range.
-    prev_day, prev_punches = repo.punches_for_previous_working_day(start)
-
     # The aggregator wants `employees` for name/department lookups when
     # the Odoo roster doesn't have a code — flatten all the week's punches
     # so the punch-derived list covers everyone who appeared at least once.
     all_punches = [p for plist in punches_by_day.values() for p in plist]
     employees = roster.employees_from_punches(all_punches)
 
-    working_by_day = {
-        d: roster.working_emp_codes_for(d) for d in days
-    }
-    if prev_day is not None:
-        working_by_day[prev_day] = roster.working_emp_codes_for(prev_day)
+    working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
 
     return build_weekly_dashboard(
         employees=employees,
@@ -123,8 +115,6 @@ def _build_weekly(
         roster_names=roster.display_names(),
         department_by_emp_code=roster.department_by_emp_code(),
         working_emp_codes_by_day=working_by_day,
-        prev_day_before_range=prev_day,
-        prev_day_before_range_punches=prev_punches,
     )
 
 
