@@ -39,6 +39,15 @@ class ExceptionTag(str, Enum):
     REVIEW = "review"
 
 
+class ExceptionOccurrence(BaseModel):
+    """One day's worth of a multi-day exception, used for the monthly
+    expanded row table. Date is ISO YYYY-MM-DD; detail is the per-day
+    string the daily detector produced (e.g. 'Late 18 min')."""
+
+    date: str
+    detail: str
+
+
 class ExceptionItem(BaseModel):
     emp_code: str
     name: str
@@ -50,6 +59,10 @@ class ExceptionItem(BaseModel):
     # exception fired (e.g. ["Mon", "Wed", "Thu"]). None in daily view so
     # the field's absence in the response means "single-day flag".
     days: list[str] | None = None
+    # Populated only in monthly view: a per-day breakdown of each
+    # occurrence with the original detail string. Powers the expandable
+    # date table beneath each flag row.
+    occurrences: list[ExceptionOccurrence] | None = None
 
 
 class ExceptionsResponse(BaseModel):

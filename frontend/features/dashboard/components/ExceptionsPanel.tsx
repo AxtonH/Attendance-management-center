@@ -93,10 +93,23 @@ export function ExceptionsPanel({
 }) {
   const [filter, setFilter] = useState<FilterType>("all");
   const [expanded, setExpanded] = useState(false);
+  // Per-row expansion (monthly only). Keyed by `tag:emp_code` so the
+  // open/closed state survives polling refreshes — same pattern as
+  // EmployeesWeekTable. Daily/weekly rows ignore this set.
+  const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const { data, isLoading } = useExceptions(date, mode);
   const allItems = data?.items ?? [];
   const items = filter === "all" ? allItems : allItems.filter((i) => i.tag === filter);
   const visible = expanded ? items : items.slice(0, PAGE_SIZE);
+
+  const toggleRow = (key: string) => {
+    setOpenRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const subtitleTable =
     mode === "monthly"
@@ -112,7 +125,7 @@ export function ExceptionsPanel({
   return (
     <Panel>
       <PanelHeader
-        title="Exceptions"
+        title="Flags"
         subtitle={subtitle}
         right={
           <div className="flex gap-1">
@@ -143,9 +156,25 @@ export function ExceptionsPanel({
         </div>
       )}
 
-      {visible.map((item) => (
-        <ExceptionRow key={`${item.tag}:${item.emp_code}`} item={item} />
-      ))}
+      {visible.map((item) => {
+        const key = `${item.tag}:${item.emp_code}`;
+        // Only monthly rows are expandable, and only when there's a
+        // multi-day occurrence list to reveal. Daily and weekly rows
+        // stay static.
+        const expandable =
+          mode === "monthly" &&
+          item.occurrences != null &&
+          item.occurrences.length > 0;
+        return (
+          <ExceptionRow
+            key={key}
+            item={item}
+            expandable={expandable}
+            isOpen={expandable && openRows.has(key)}
+            onToggle={expandable ? () => toggleRow(key) : undefined}
+          />
+        );
+      })}
 
       {items.length > PAGE_SIZE && (
         <button
@@ -162,7 +191,17 @@ export function ExceptionsPanel({
   );
 }
 
-function ExceptionRow({ item }: { item: ExceptionItem }) {
+function ExceptionRow({
+  item,
+  expandable = false,
+  isOpen = false,
+  onToggle,
+}: {
+  item: ExceptionItem;
+  expandable?: boolean;
+  isOpen?: boolean;
+  onToggle?: () => void;
+}) {
   const dotColor =
     item.severity === "high"
       ? "bg-severity-high"
@@ -170,12 +209,12 @@ function ExceptionRow({ item }: { item: ExceptionItem }) {
         ? "bg-severity-med"
         : "bg-severity-low";
 
-  // Weekly rows carry a `days` list (e.g. ["Mon", "Wed"]). Daily rows
-  // don't, so the chip row is hidden entirely.
+  // Weekly rows carry a `days` list (e.g. ["Mon", "Wed"]). Daily and
+  // monthly rows don't, so the chip strip is hidden entirely.
   const dayChips = item.days && item.days.length > 0 ? item.days : null;
 
-  return (
-    <div className="flex cursor-pointer items-center gap-[14px] border-b border-border px-[18px] py-[14px] transition-colors hover:bg-bg-subtle">
+  const rowBody = (
+    <>
       <div className={`h-[6px] w-[6px] shrink-0 rounded-full ${dotColor}`} />
       <div className="min-w-0 flex-1">
         <p className="m-0 text-[13px] font-medium">
@@ -201,8 +240,92 @@ function ExceptionRow({ item }: { item: ExceptionItem }) {
         </div>
       </div>
       <Tag tag={item.tag} />
+    </>
+  );
+
+  // Edge's axe lint flags any JSX expression on aria-expanded as a false
+  // positive — passing it via spread satisfies the rule while React
+  // still serializes the boolean to the correct DOM attribute.
+  const ariaProps: { "aria-expanded": boolean } = { "aria-expanded": isOpen };
+
+  return (
+    <div className="border-b border-border">
+      {expandable ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          {...ariaProps}
+          className={`flex w-full items-center gap-[14px] px-[18px] py-[14px] text-left transition-colors hover:bg-bg-subtle ${
+            isOpen ? "bg-bg-subtle" : ""
+          }`}
+        >
+          {rowBody}
+        </button>
+      ) : (
+        <div className="flex items-center gap-[14px] px-[18px] py-[14px]">
+          {rowBody}
+        </div>
+      )}
+      {expandable && isOpen && item.occurrences && (
+        <ExceptionOccurrencesTable
+          tag={item.tag}
+          occurrences={item.occurrences}
+        />
+      )}
     </div>
   );
+}
+
+function ExceptionOccurrencesTable({
+  tag,
+  occurrences,
+}: {
+  tag: ExceptionItem["tag"];
+  occurrences: NonNullable<ExceptionItem["occurrences"]>;
+}) {
+  // Matches the EmployeesWeekTable expanded-child layout: spacer on the
+  // left (~7.5% of panel width) so the inner table sits visually nested
+  // under its parent row.
+  return (
+    <div className="flex border-t border-border">
+      <div className="w-[7.5%] shrink-0" />
+      <table className="flex-1 text-[13px]">
+        <thead className="bg-bg-subtle text-[11px] uppercase tracking-[0.04em] text-text-secondary">
+          <tr>
+            <th className="px-[18px] py-[10px] text-left font-medium">Date</th>
+            <th className="px-[18px] py-[10px] text-left font-medium">
+              Infraction type
+            </th>
+            <th className="px-[18px] py-[10px] text-left font-medium">Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {occurrences.map((o) => (
+            <tr
+              key={o.date}
+              className="border-t border-border hover:bg-bg-subtle"
+            >
+              <td className="px-[18px] py-[12px] font-mono text-text-secondary">
+                {formatIsoAsDdMmYyyy(o.date)}
+              </td>
+              <td className="px-[18px] py-[12px]">
+                <Tag tag={tag} />
+              </td>
+              <td className="px-[18px] py-[12px] text-text-secondary">
+                {o.detail}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// "2026-05-18" → "18-05-2026" per Prezlab's DD-MM-YYYY convention.
+function formatIsoAsDdMmYyyy(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}-${m}-${y}`;
 }
 
 function Tag({ tag }: { tag: ExceptionItem["tag"] }) {

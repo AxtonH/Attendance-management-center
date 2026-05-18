@@ -399,6 +399,46 @@ class TestMonthlyMode:
         assert "2×" in row.detail
         assert "across 2 days" in row.detail
 
+    def test_emits_occurrences_when_chips_off(self):
+        # Monthly mode populates `occurrences` so the frontend can expand
+        # the row into a per-day Date · Type · Detail table.
+        punches = _empty_week()
+        punches[date(2026, 5, 10)] = [_punch("1001", date(2026, 5, 10), 9, 20, 1)]
+        punches[date(2026, 5, 13)] = [_punch("1001", date(2026, 5, 13), 9, 45, 2)]
+        result = build_weekly_exceptions(
+            employees=[_emp("1001")],
+            punches_by_day=punches,
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "K"},
+            show_day_chips=False,
+        )
+        late_row = next(i for i in result.items if i.tag == ExceptionTag.LATE)
+        assert late_row.occurrences is not None
+        assert len(late_row.occurrences) == 2
+        # Sorted by date ascending.
+        assert late_row.occurrences[0].date == "2026-05-10"
+        assert late_row.occurrences[1].date == "2026-05-13"
+        # Each occurrence keeps the per-day detail (e.g. "Late 5 min").
+        assert "Late" in late_row.occurrences[0].detail
+        # Daily mode (chips on) leaves occurrences null.
+        result_weekly = build_weekly_exceptions(
+            employees=[_emp("1001")],
+            punches_by_day=punches,
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "K"},
+            show_day_chips=True,
+        )
+        late_row_w = next(
+            i for i in result_weekly.items if i.tag == ExceptionTag.LATE
+        )
+        assert late_row_w.occurrences is None
+
     def test_chip_suppression_preserves_occurrence_sort(self):
         # Critical: turning chips off must not lose the "most occurrences
         # first" ordering within a tag. Two late employees, one with 3

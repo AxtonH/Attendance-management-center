@@ -34,6 +34,7 @@ from app.features.dashboard.models import (
     DepartmentRollup,
     DepartmentsResponse,
     ExceptionItem,
+    ExceptionOccurrence,
     ExceptionsResponse,
     ExceptionTag,
     OverviewResponse,
@@ -409,6 +410,22 @@ def build_weekly_exceptions(
             # day count into the detail instead.
             detail = f"{n}× {label.lower()} · across {n} days"
         unique_days = sorted(set(entry["days"]))
+        # Monthly mode: emit a per-day breakdown so the row can expand
+        # into a Date · Type · Detail table. Pair days with the original
+        # per-detector detail strings, then sort by date so the user
+        # reads occurrences in chronological order.
+        occurrences: list[ExceptionOccurrence] | None
+        if show_day_chips:
+            occurrences = None
+        else:
+            paired = sorted(
+                zip(entry["days"], entry["details"], strict=True),
+                key=lambda p: p[0],
+            )
+            occurrences = [
+                ExceptionOccurrence(date=d.isoformat(), detail=detail_str)
+                for d, detail_str in paired
+            ]
         items_with_n.append((
             ExceptionItem(
                 emp_code=emp_code,
@@ -422,6 +439,7 @@ def build_weekly_exceptions(
                     if show_day_chips
                     else None
                 ),
+                occurrences=occurrences,
             ),
             n,
         ))

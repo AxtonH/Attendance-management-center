@@ -22,6 +22,12 @@ export const exceptionTag = z.enum([
   "review",
 ]);
 
+export const exceptionOccurrenceSchema = z.object({
+  date: z.string(),    // ISO YYYY-MM-DD
+  detail: z.string(),  // e.g. "Late 18 min"
+});
+export type ExceptionOccurrence = z.infer<typeof exceptionOccurrenceSchema>;
+
 export const exceptionItemSchema = z.object({
   emp_code: z.string(),
   name: z.string(),
@@ -32,6 +38,9 @@ export const exceptionItemSchema = z.object({
   // Weekly view only: short weekday labels ("Mon", "Wed") on which this
   // exception fired. Absent/null in daily view = single-day flag.
   days: z.array(z.string()).nullable().optional(),
+  // Monthly view only: per-day breakdown powering the expandable
+  // Date · Type · Detail child table. null/absent in other modes.
+  occurrences: z.array(exceptionOccurrenceSchema).nullable().optional(),
 });
 export type ExceptionItem = z.infer<typeof exceptionItemSchema>;
 
