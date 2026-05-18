@@ -12,9 +12,10 @@ export function PulseBar({
   mode?: DashboardMode;
 }) {
   const { data, isLoading, isError } = useOverview(date, mode);
-  // In weekly mode the numbers are person-days summed across the week;
+  // In range modes the numbers are sums (or distinct people for Present);
   // suffix makes that explicit so 14 Late doesn't read as 14 lates today.
-  const suffix = mode === "weekly" ? " this week" : "";
+  const suffix =
+    mode === "weekly" ? " this week" : mode === "monthly" ? " this month" : "";
 
   return (
     <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">

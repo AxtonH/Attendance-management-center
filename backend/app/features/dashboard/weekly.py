@@ -273,17 +273,22 @@ def build_weekly_exceptions(
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    show_day_chips: bool = True,
 ) -> ExceptionsResponse:
-    """Run every per-day detector across the week, then group by (tag, emp_code).
+    """Run every per-day detector across the range, then group by (tag, emp_code).
 
-    Each grouped row carries a `days` list of short weekday labels
-    ("Mon", "Wed"). Order within tag is by number of occurrences desc
-    (more frequent issues first), then by name.
+    Despite the "weekly" name, this composes across any day range — the
+    monthly view reuses it with ~30 days.
+
+    Each grouped row normally carries a `days` list of short weekday
+    labels ("Mon", "Wed"). For longer ranges (monthly) the caller sets
+    `show_day_chips=False`, which omits the chips and instead suffixes
+    the detail line with "across N days" so the row stays readable.
 
     Missing-punch and incomplete-hours detectors look at the *prior*
-    working day for each day in the range. For day 0 of the range (the
-    Sunday), the route passes the punches from the day before that so
-    the boundary works correctly.
+    working day for each day in the range. Days falling outside the
+    range are skipped so chip labels can't ambiguously refer to days
+    outside the rendered window.
     """
     roster_names = roster_names or {}
     # (tag, emp_code) → {"name": ..., "department": ..., "severity": ...,
@@ -383,7 +388,9 @@ def build_weekly_exceptions(
             )
 
     allowed = _FILTER_TAGS.get(filter_type, set())
-    items: list[ExceptionItem] = []
+    # Build a list of (item, occurrence_count) so the secondary sort key
+    # (occurrences desc) survives even when `days` is omitted (monthly).
+    items_with_n: list[tuple[ExceptionItem, int]] = []
     for (tag, emp_code), entry in grouped.items():
         if tag not in allowed:
             continue
@@ -393,8 +400,16 @@ def build_weekly_exceptions(
         # synthesize a clean weekly-tense string instead.
         n = len(entry["days"])
         label = _tag_label(tag).capitalize()
-        detail = label if n == 1 else f"{n}× {label.lower()}"
-        items.append(
+        if n == 1:
+            detail = label
+        elif show_day_chips:
+            detail = f"{n}× {label.lower()}"
+        else:
+            # Monthly view: chips would explode visually, so encode the
+            # day count into the detail instead.
+            detail = f"{n}× {label.lower()} · across {n} days"
+        unique_days = sorted(set(entry["days"]))
+        items_with_n.append((
             ExceptionItem(
                 emp_code=emp_code,
                 name=entry["name"],
@@ -402,15 +417,21 @@ def build_weekly_exceptions(
                 severity=entry["severity"],
                 tag=tag,
                 detail=detail,
-                days=[_WEEKDAY_LABELS[d.weekday()] for d in sorted(set(entry["days"]))],
-            )
-        )
+                days=(
+                    [_WEEKDAY_LABELS[d.weekday()] for d in unique_days]
+                    if show_day_chips
+                    else None
+                ),
+            ),
+            n,
+        ))
 
-    items.sort(key=lambda it: (
-        _TAG_ORDER.get(it.tag, 99),
-        -(len(it.days) if it.days else 0),
-        it.name.lower(),
+    items_with_n.sort(key=lambda pair: (
+        _TAG_ORDER.get(pair[0].tag, 99),
+        -pair[1],
+        pair[0].name.lower(),
     ))
+    items = [it for it, _ in items_with_n]
     return ExceptionsResponse(
         date=days[0].isoformat(), total=len(items), items=items
     )
@@ -432,7 +453,16 @@ def build_weekly_dashboard(
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
     arrival_bucket_minutes: int = 15,
     arrival_window_start: str = "07:30",
+    mode_label: str = "weekly",
+    show_day_chips: bool = True,
 ) -> DashboardResponse:
+    """Range-agnostic aggregator.
+
+    `mode_label` and `show_day_chips` let the monthly route reuse this
+    function unchanged: pass `mode_label="monthly"` and `show_day_chips=False`
+    so the response advertises the right mode and the exception rows omit
+    chips (the row count would otherwise explode for a 30-day range).
+    """
     overview = build_weekly_overview(
         punches_by_day, rule, days, now,
         expected_emp_codes=expected_emp_codes,
@@ -443,6 +473,7 @@ def build_weekly_dashboard(
         expected_emp_codes=expected_emp_codes,
         roster_names=roster_names,
         working_emp_codes_by_day=working_emp_codes_by_day,
+        show_day_chips=show_day_chips,
     )
     arrivals = build_weekly_arrivals(
         punches_by_day, days,
@@ -462,7 +493,7 @@ def build_weekly_dashboard(
     anchor = days[0]
     return DashboardResponse(
         date=anchor.isoformat(),
-        mode="weekly",
+        mode=mode_label,
         range_start=days[0].isoformat(),
         range_end=days[-1].isoformat(),
         overview=overview,

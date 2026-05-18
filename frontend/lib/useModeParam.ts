@@ -3,9 +3,13 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
-export type DashboardMode = "daily" | "weekly";
+export type DashboardMode = "daily" | "weekly" | "monthly";
 
-const VALID: ReadonlySet<DashboardMode> = new Set(["daily", "weekly"]);
+const VALID: ReadonlySet<DashboardMode> = new Set([
+  "daily",
+  "weekly",
+  "monthly",
+]);
 
 /**
  * Read & write the ?mode=daily|weekly URL query param.

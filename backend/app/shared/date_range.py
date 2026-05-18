@@ -38,4 +38,27 @@ def iter_days(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range(span + 1)]
 
 
-__all__ = ["week_range_for", "iter_days"]
+def month_range_for(anchor: date) -> tuple[date, date]:
+    """Return (start, end) for the calendar month containing `anchor`.
+
+    Start is always the 1st; end is the last day of that month (inclusive).
+    Matches payroll cycles, expense reports, and how people think about
+    months.
+
+    Examples:
+      Tue May 12 → (May 1, May 31)
+      Sat Feb 29 (leap year) → (Feb 1, Feb 29)
+      Sun Apr 30 → (Apr 1, Apr 30)
+    """
+    start = anchor.replace(day=1)
+    # Last day of the month = day before the first of next month. Handles
+    # December (year rollover) and leap-Feb without special-casing.
+    if start.month == 12:
+        next_month_start = start.replace(year=start.year + 1, month=1)
+    else:
+        next_month_start = start.replace(month=start.month + 1)
+    end = next_month_start - timedelta(days=1)
+    return start, end
+
+
+__all__ = ["week_range_for", "month_range_for", "iter_days"]

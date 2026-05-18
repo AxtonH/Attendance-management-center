@@ -41,6 +41,18 @@ export function weekRangeFor(iso: string): { start: Date; end: Date } {
 }
 
 /**
+ * Render the calendar month containing the ISO date as "May 2026".
+ * Mirrors the backend's `month_range_for` for the header label.
+ */
+export function formatMonthLabel(iso: string): string {
+  const d = parseIsoDate(iso);
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    year: "numeric",
+  }).format(d);
+}
+
+/**
  * Render a Sun–Sat week as "10 May – 16 May 2026". When the range spans
  * two months it expands to "28 Apr – 4 May 2026"; spanning two years
  * shows both years.

@@ -16,7 +16,7 @@ import type {
 // what BioTime can push (every 5 min).
 const POLL_MS = 60_000;
 
-export type DashboardMode = "daily" | "weekly";
+export type DashboardMode = "daily" | "weekly" | "monthly";
 
 function useDashboardSelector<T>(
   date: string | undefined,

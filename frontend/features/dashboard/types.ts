@@ -73,9 +73,9 @@ export type Arrivals = z.infer<typeof arrivalsSchema>;
 export const dashboardSchema = z.object({
   date: z.string(),
   // Required — backend always sends it. Keeping it required gives a clean
-  // Dashboard type with `mode: "daily" | "weekly"` and avoids the
-  // unknown-leak from .default/.catch under zod 3.23's input inference.
-  mode: z.enum(["daily", "weekly"]),
+  // Dashboard type with `mode: "daily" | "weekly" | "monthly"` and avoids
+  // the unknown-leak from .default/.catch under zod 3.23's input inference.
+  mode: z.enum(["daily", "weekly", "monthly"]),
   range_start: z.string().nullable().optional(),
   range_end: z.string().nullable().optional(),
   overview: overviewSchema,

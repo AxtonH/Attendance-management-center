@@ -4,7 +4,7 @@ import { dashboardSchema, type Dashboard } from "./types";
 
 export function getDashboard(
   date?: string,
-  mode: "daily" | "weekly" = "daily",
+  mode: "daily" | "weekly" | "monthly" = "daily",
 ): Promise<Dashboard> {
   return request("/api/dashboard", dashboardSchema, {
     date,

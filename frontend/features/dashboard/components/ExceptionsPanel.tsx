@@ -58,6 +58,30 @@ const SUBTITLE_WEEKLY: Record<FilterType, SubtitleCopy> = {
   },
 };
 
+const SUBTITLE_MONTHLY: Record<FilterType, SubtitleCopy> = {
+  all: { singular: "violation this month", plural: "violations this month" },
+  absent: {
+    singular: "Prezlaber absent this month",
+    plural: "Prezlabers absent this month",
+  },
+  missing_punch: {
+    singular: "Prezlaber missing a punch this month",
+    plural: "Prezlabers missing a punch this month",
+  },
+  incomplete_hours: {
+    singular: "Prezlaber short on hours this month",
+    plural: "Prezlabers short on hours this month",
+  },
+  late: {
+    singular: "Prezlaber late this month",
+    plural: "Prezlabers late this month",
+  },
+  review: {
+    singular: "Prezlaber to review this month",
+    plural: "Prezlabers to review this month",
+  },
+};
+
 const PAGE_SIZE = 6;
 
 export function ExceptionsPanel({
@@ -74,7 +98,13 @@ export function ExceptionsPanel({
   const items = filter === "all" ? allItems : allItems.filter((i) => i.tag === filter);
   const visible = expanded ? items : items.slice(0, PAGE_SIZE);
 
-  const subtitleCopy = (mode === "weekly" ? SUBTITLE_WEEKLY : SUBTITLE_DAILY)[filter];
+  const subtitleTable =
+    mode === "monthly"
+      ? SUBTITLE_MONTHLY
+      : mode === "weekly"
+        ? SUBTITLE_WEEKLY
+        : SUBTITLE_DAILY;
+  const subtitleCopy = subtitleTable[filter];
   const subtitle = `${items.length} ${
     items.length === 1 ? subtitleCopy.singular : subtitleCopy.plural
   }`;

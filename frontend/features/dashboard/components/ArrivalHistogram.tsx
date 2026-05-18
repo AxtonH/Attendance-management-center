@@ -27,7 +27,11 @@ export function ArrivalHistogram({
 
   return (
     <SidePanel
-      label={mode === "weekly" ? "Average arrival pattern" : "Today's arrival pattern"}
+      label={
+        mode === "daily"
+          ? "Today's arrival pattern"
+          : "Average arrival pattern"
+      }
     >
       {/* flex-1 grows the chart to fill whatever vertical space the
           grid hands the panel — keeps it the same height as the

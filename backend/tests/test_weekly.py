@@ -353,3 +353,72 @@ class TestWeeklyDashboard:
         assert result.mode == "weekly"
         assert result.range_start == "2026-05-10"
         assert result.range_end == "2026-05-16"
+
+
+# ---------- Monthly mode ----------
+
+
+class TestMonthlyMode:
+    """Monthly view reuses the weekly aggregators with a longer day list
+    and two flag changes: mode label + chip suppression. These tests lock
+    in those differences."""
+
+    def test_mode_label_passes_through(self):
+        result = build_weekly_dashboard(
+            employees=[],
+            punches_by_day=_empty_week(),
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            mode_label="monthly",
+        )
+        assert result.mode == "monthly"
+
+    def test_show_day_chips_false_omits_chips(self):
+        # Employee late on two days. With chips on we'd see ["Sun","Mon"];
+        # with chips off we should see no `days` field, just a detail
+        # string that absorbs the day count.
+        punches = _empty_week()
+        punches[date(2026, 5, 10)] = [_punch("1001", date(2026, 5, 10), 9, 30, 1)]
+        punches[date(2026, 5, 11)] = [_punch("1001", date(2026, 5, 11), 9, 45, 2)]
+        result = build_weekly_exceptions(
+            employees=[_emp("1001", "Khaled")],
+            punches_by_day=punches,
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "Khaled"},
+            show_day_chips=False,
+        )
+        late_rows = [i for i in result.items if i.tag == ExceptionTag.LATE]
+        assert len(late_rows) == 1
+        row = late_rows[0]
+        assert row.days is None
+        # Detail absorbs the day count: "2× late · across 2 days".
+        assert "2×" in row.detail
+        assert "across 2 days" in row.detail
+
+    def test_chip_suppression_preserves_occurrence_sort(self):
+        # Critical: turning chips off must not lose the "most occurrences
+        # first" ordering within a tag. Two late employees, one with 3
+        # occurrences and one with 1, should still order 3 before 1.
+        punches = _empty_week()
+        # 1001 late 3 times
+        punches[date(2026, 5, 10)] = [_punch("1001", date(2026, 5, 10), 9, 30, 1)]
+        punches[date(2026, 5, 11)] = [_punch("1001", date(2026, 5, 11), 9, 40, 2)]
+        punches[date(2026, 5, 12)] = [_punch("1001", date(2026, 5, 12), 9, 50, 3)]
+        # 1002 late 1 time
+        punches[date(2026, 5, 13)] = [_punch("1002", date(2026, 5, 13), 9, 30, 4)]
+        result = build_weekly_exceptions(
+            employees=[_emp("1001", "A"), _emp("1002", "B")],
+            punches_by_day=punches,
+            rule=RULE,
+            days=WEEK_DAYS,
+            now=NOW,
+            expected_emp_codes=frozenset({"1001", "1002"}),
+            roster_names={"1001": "A", "1002": "B"},
+            show_day_chips=False,
+        )
+        late_codes = [i.emp_code for i in result.items if i.tag == ExceptionTag.LATE]
+        assert late_codes == ["1001", "1002"]

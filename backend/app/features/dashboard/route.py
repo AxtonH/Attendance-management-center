@@ -31,7 +31,7 @@ from app.features.dashboard.service import (
     build_overview,
 )
 from app.features.dashboard.weekly import build_weekly_dashboard
-from app.shared.date_range import iter_days, week_range_for
+from app.shared.date_range import iter_days, month_range_for, week_range_for
 
 router = APIRouter(tags=["dashboard"])
 
@@ -39,7 +39,7 @@ FilterType = Literal[
     "all", "late", "absent", "missing_punch", "incomplete_hours", "review"
 ]
 
-Mode = Literal["daily", "weekly"]
+Mode = Literal["daily", "weekly", "monthly"]
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
@@ -50,8 +50,10 @@ def dashboard(
     roster: RosterProvider = Depends(get_roster),
     repo: PunchRepository = Depends(get_punch_repo),
 ) -> DashboardResponse:
+    if mode == "monthly":
+        return _build_range(day, now, roster, repo, kind="monthly")
     if mode == "weekly":
-        return _build_weekly(day, now, roster, repo)
+        return _build_range(day, now, roster, repo, kind="weekly")
     return _build_daily(day, now, roster, repo)
 
 
@@ -84,26 +86,41 @@ def _build_daily(
     )
 
 
-def _build_weekly(
+def _build_range(
     day: date,
     now: datetime,
     roster: RosterProvider,
     repo: PunchRepository,
+    *,
+    kind: Literal["weekly", "monthly"],
 ) -> DashboardResponse:
-    start, end = week_range_for(day)
+    """Unified multi-day builder. Weekly and monthly share aggregators —
+    only the date range, the response's mode label, and the exception
+    chip strategy differ.
+
+    Performance: one paginated Supabase round-trip for the whole range.
+    Odoo state is reused from cache. A month query is ~5-6 pages, a week
+    is 1-2; both are well under a second on typical Prezlab data.
+    """
+    if kind == "monthly":
+        start, end = month_range_for(day)
+    else:
+        start, end = week_range_for(day)
     days = iter_days(start, end)
 
-    # One paginated Supabase round-trip for the whole week. The grouping
-    # happens in memory so the aggregator doesn't re-query per day.
     punches_by_day = repo.punches_grouped_by_day(start, end)
 
     # The aggregator wants `employees` for name/department lookups when
-    # the Odoo roster doesn't have a code — flatten all the week's punches
-    # so the punch-derived list covers everyone who appeared at least once.
+    # the Odoo roster doesn't have a code — flatten all punches so the
+    # punch-derived list covers everyone who appeared at least once.
     all_punches = [p for plist in punches_by_day.values() for p in plist]
     employees = roster.employees_from_punches(all_punches)
 
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
+
+    # Monthly: drop day chips on exception rows (a chronic offender
+    # could have 20+ days). The detail line absorbs the count instead.
+    show_day_chips = kind == "weekly"
 
     return build_weekly_dashboard(
         employees=employees,
@@ -115,6 +132,8 @@ def _build_weekly(
         roster_names=roster.display_names(),
         department_by_emp_code=roster.department_by_emp_code(),
         working_emp_codes_by_day=working_by_day,
+        mode_label=kind,
+        show_day_chips=show_day_chips,
     )
 
 
