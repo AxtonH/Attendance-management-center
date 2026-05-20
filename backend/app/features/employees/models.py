@@ -53,3 +53,16 @@ class EmployeesWeekResponse(BaseModel):
     range_start: str
     range_end: str
     rows: list[EmployeeWeek]
+
+
+class EmployeesMonthResponse(BaseModel):
+    """Same row shape as the weekly response. Distinct wrapper so the
+    monthly endpoint stays self-documenting and the frontend can key its
+    queries separately. `expected_days` / `expected_minutes` on each row
+    are not meaningful at month scale (variable month length, holidays,
+    etc.) and the frontend ignores them in monthly view.
+    """
+
+    range_start: str
+    range_end: str
+    rows: list[EmployeeWeek]

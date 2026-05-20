@@ -44,3 +44,14 @@ export const employeesWeekSchema = z.object({
   rows: z.array(employeeWeekSchema),
 });
 export type EmployeesWeek = z.infer<typeof employeesWeekSchema>;
+
+// Monthly view: same per-row shape as weekly (employee + their daily
+// children). `expected_*` fields on each row are present but unused —
+// month length and holidays make a fixed expected-hours target
+// meaningless at this scale.
+export const employeesMonthSchema = z.object({
+  range_start: z.string(),
+  range_end: z.string(),
+  rows: z.array(employeeWeekSchema),
+});
+export type EmployeesMonth = z.infer<typeof employeesMonthSchema>;

@@ -3,18 +3,25 @@
 import { useMemo, useState } from "react";
 
 import { Panel, PanelHeader } from "@/components/ui/Panel";
-import { formatTime, formatWorkedMinutes } from "@/lib/format";
+import {
+  formatTime,
+  formatWeekRange,
+  formatWorkedMinutes,
+  weekRangeFor,
+} from "@/lib/format";
 import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
-import { useEmployeesWeek } from "../queries";
-import type { EmployeeWeek } from "../types";
+import { useEmployeesMonth } from "../queries";
+import type { EmployeeWeek, EmployeeWeekDay } from "../types";
 
-// Renders one expandable row per employee with 1+ punches in the week.
-// Each row's collapse state is local React state — keyed by emp_code so
-// expanded employees survive across re-renders (e.g. when polling pulls
-// fresh data) without lifting state to the parent.
-export function EmployeesWeekTable({ date }: { date?: string }) {
-  const { data, isLoading } = useEmployeesWeek(date);
+// Monthly variant of EmployeesWeekTable. The per-employee row shape is
+// identical (we reuse the EmployeeWeek type), but the child table groups
+// the punched days into Sunday-anchored week sections so a 20-row table
+// scans like a small calendar instead of a flat list. The header drops
+// the `/ expected hours` denominator since a calendar month has no
+// fixed target (variable length, holidays, etc.).
+export function EmployeesMonthTable({ date }: { date?: string }) {
+  const { data, isLoading } = useEmployeesMonth(date);
   const { buffer, clear } = useTypeAheadFilter();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
@@ -37,14 +44,13 @@ export function EmployeesWeekTable({ date }: { date?: string }) {
   return (
     <Panel>
       <PanelHeader
-        title="Employees this week"
+        title="Employees this month"
         subtitle={`${rows.length} of ${data?.rows.length ?? 0} shown`}
         right={<FilterChip buffer={buffer} onClear={clear} />}
       />
 
-      {/* Column header strip — matches the daily Employees table styling
-          (bg-bg-subtle + uppercase tracking) so the two views feel like
-          siblings, not different products. */}
+      {/* Same column header strip as weekly — keeps the two views looking
+          like siblings. */}
       <div className="grid grid-cols-[24px_72px_1fr_auto] items-center gap-[14px] border-b border-border bg-bg-subtle px-[18px] py-[10px] text-[11px] uppercase tracking-[0.04em] text-text-secondary">
         <span aria-hidden />
         <span>Emp code</span>
@@ -61,11 +67,11 @@ export function EmployeesWeekTable({ date }: { date?: string }) {
         <p className="px-[18px] py-6 text-center text-[13px] text-text-tertiary">
           {buffer
             ? `No employee matches “${buffer}”.`
-            : "No punches recorded this week."}
+            : "No punches recorded this month."}
         </p>
       )}
       {rows.map((row) => (
-        <EmployeeWeekRow
+        <EmployeeMonthRow
           key={row.emp_code}
           row={row}
           isExpanded={expanded.has(row.emp_code)}
@@ -76,7 +82,7 @@ export function EmployeesWeekTable({ date }: { date?: string }) {
   );
 }
 
-function EmployeeWeekRow({
+function EmployeeMonthRow({
   row,
   isExpanded,
   onToggle,
@@ -86,11 +92,9 @@ function EmployeeWeekRow({
   onToggle: () => void;
 }) {
   const daysLabel = row.days_worked === 1 ? "1 day" : `${row.days_worked} days`;
-  // Edge's axe lint flags any JSX expression on aria-expanded because it
-  // can't statically resolve the value — false positive. React serializes
-  // the boolean to the correct "true"/"false" attribute at runtime. The
-  // workaround is to pass the prop via a spread so the rule sees an
-  // object spread, not an attribute-with-expression.
+  // Edge's axe lint flags any JSX expression on aria-expanded as a false
+  // positive — passing it via spread satisfies the rule while React
+  // still serializes the boolean to the correct DOM attribute.
   const ariaProps: { "aria-expanded": boolean } = { "aria-expanded": isExpanded };
 
   return (
@@ -103,7 +107,7 @@ function EmployeeWeekRow({
           isExpanded ? "bg-bg-subtle" : ""
         }`}
       >
-        <Chevron open={isExpanded} />
+        <span aria-hidden />
         <span className="font-mono text-text-secondary">{row.emp_code}</span>
         <span className="truncate font-medium">{row.name}</span>
         <span className="tabular-nums">
@@ -113,22 +117,21 @@ function EmployeeWeekRow({
           </span>
         </span>
       </button>
-      {isExpanded && <EmployeeWeekDaysTable days={row.days} />}
+      {isExpanded && <EmployeeMonthDaysTable days={row.days} />}
     </div>
   );
 }
 
-function EmployeeWeekDaysTable({ days }: { days: EmployeeWeek["days"] }) {
-  // Mirrors the daily EmployeesTable styling so the two views feel like
-  // the same product. The flex+ml-auto wrapper pushes the table to the
-  // right edge of the panel so the natural empty space (table cols are
-  // tighter than the parent row) sits on the LEFT — reading direction
-  // hits the column headers immediately, not whitespace.
+function EmployeeMonthDaysTable({ days }: { days: EmployeeWeek["days"] }) {
+  // Group child rows by the Sun-anchored week containing each day. We
+  // memoize because the grouping is non-trivial and the same `days`
+  // reference is stable across re-renders inside the expansion.
+  const weeks = useMemo(() => groupByWeek(days), [days]);
+
   return (
     <div className="flex border-t border-border">
-      {/* Spacer cap on the left: pushes the table rightward by ~7.5%
-          of the panel width so the data reads weighted-right without
-          a large empty band before it. */}
+      {/* Same 7.5% left spacer as the weekly view so the child table
+          visually nests under its parent row. */}
       <div className="w-[7.5%] shrink-0" />
       <table className="flex-1 text-[13px]">
         <thead className="bg-bg-subtle text-[11px] uppercase tracking-[0.04em] text-text-secondary">
@@ -140,24 +143,12 @@ function EmployeeWeekDaysTable({ days }: { days: EmployeeWeek["days"] }) {
           </tr>
         </thead>
         <tbody>
-          {days.map((d) => (
-            <tr
-              key={d.date}
-              className="border-t border-border hover:bg-bg-subtle"
-            >
-              <td className="px-[18px] py-[12px] font-mono text-text-secondary">
-                {formatWeekdayDate(d.date)}
-              </td>
-              <td className="px-[18px] py-[12px] text-text-secondary">
-                {formatTime(d.punch_in)}
-              </td>
-              <td className="px-[18px] py-[12px] text-text-secondary">
-                {formatTime(d.punch_out)}
-              </td>
-              <td className="px-[18px] py-[12px] text-text-secondary tabular-nums">
-                {formatWorkedMinutes(d.worked_minutes)}
-              </td>
-            </tr>
+          {weeks.map((week) => (
+            <WeekSection
+              key={week.headerIso}
+              headerIso={week.headerIso}
+              days={week.days}
+            />
           ))}
         </tbody>
       </table>
@@ -165,8 +156,75 @@ function EmployeeWeekDaysTable({ days }: { days: EmployeeWeek["days"] }) {
   );
 }
 
-// "Sun · 10 May" — short weekday + day-month so the row reads cleanly
-// even when the user is viewing a week that crosses month boundaries.
+function WeekSection({
+  headerIso,
+  days,
+}: {
+  headerIso: string;
+  days: EmployeeWeekDay[];
+}) {
+  return (
+    <>
+      <tr className="border-t border-border bg-bg-subtle/60">
+        <td
+          colSpan={4}
+          className="px-[18px] py-[6px] text-[11px] font-medium uppercase tracking-[0.04em] text-text-tertiary"
+        >
+          Week of {formatWeekRange(headerIso)}
+        </td>
+      </tr>
+      {days.map((d) => (
+        <tr
+          key={d.date}
+          className="border-t border-border hover:bg-bg-subtle"
+        >
+          <td className="px-[18px] py-[12px] font-mono text-text-secondary">
+            {formatWeekdayDate(d.date)}
+          </td>
+          <td className="px-[18px] py-[12px] text-text-secondary">
+            {formatTime(d.punch_in)}
+          </td>
+          <td className="px-[18px] py-[12px] text-text-secondary">
+            {formatTime(d.punch_out)}
+          </td>
+          <td className="px-[18px] py-[12px] text-text-secondary tabular-nums">
+            {formatWorkedMinutes(d.worked_minutes)}
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+// Bucket a chronological list of days into Sunday-anchored weeks. We
+// only include days that are actually in the input (partial weeks at
+// month edges show fewer rows — matches the "show only days inside the
+// month" decision). The header date is the week's Sunday so a single
+// formatWeekRange() call renders the full range label.
+function groupByWeek(
+  days: EmployeeWeekDay[],
+): { headerIso: string; days: EmployeeWeekDay[] }[] {
+  const buckets: { headerIso: string; days: EmployeeWeekDay[] }[] = [];
+  for (const d of days) {
+    const sunday = weekRangeFor(d.date).start;
+    const headerIso = toIso(sunday);
+    const last = buckets[buckets.length - 1];
+    if (last && last.headerIso === headerIso) {
+      last.days.push(d);
+    } else {
+      buckets.push({ headerIso, days: [d] });
+    }
+  }
+  return buckets;
+}
+
+function toIso(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function formatWeekdayDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   const local = new Date(y, m - 1, d);
@@ -175,29 +233,6 @@ function formatWeekdayDate(iso: string): string {
     day: "2-digit",
     month: "short",
   });
-}
-
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      className={`shrink-0 text-text-tertiary transition-transform ${
-        open ? "rotate-90" : ""
-      }`}
-      aria-hidden
-    >
-      <path
-        d="M4 2.5L8 6L4 9.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 function FilterChip({ buffer, onClear }: { buffer: string; onClear: () => void }) {
