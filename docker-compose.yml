@@ -1,6 +1,8 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: .                    # repo root: lets backend COPY config/
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -8,10 +10,11 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Amman}
       APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
-      CONFIG_DIR: /config
+      ODOO_URL: ${ODOO_URL}
+      ODOO_DB: ${ODOO_DB}
+      ODOO_USERNAME: ${ODOO_USERNAME}
+      ODOO_PASSWORD: ${ODOO_PASSWORD}
       CORS_ALLOW_ORIGINS: http://localhost:3000
-    volumes:
-      - ./config:/config:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
       interval: 30s
@@ -19,11 +22,13 @@ services:
       retries: 3
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     depends_on:
       backend:
         condition: service_started

@@ -1,0 +1,27 @@
+# Railway config for the Next.js frontend service.
+#
+# When creating this service in Railway:
+#   - Root Directory: frontend
+#   - Dockerfile Path: Dockerfile (relative to root directory above)
+#
+# IMPORTANT: NEXT_PUBLIC_API_BASE_URL must be set as a Railway
+# environment variable BEFORE the first deploy. Next.js inlines
+# NEXT_PUBLIC_* vars into the client bundle at BUILD time — if you
+# add it later you must trigger a redeploy for it to take effect.
+# Set it to the backend service's public URL, e.g.
+#   https://<your-backend-service>.up.railway.app
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+# Railway automatically passes NEXT_PUBLIC_* env vars as Docker build
+# args when they're declared with ARG in the Dockerfile (we declare
+# NEXT_PUBLIC_API_BASE_URL there). No further config needed here.
+
+[deploy]
+# Next.js doesn't expose a dedicated /health endpoint by default;
+# the root path returns the dashboard with HTTP 200 once ready.
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

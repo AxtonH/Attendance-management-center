@@ -1,0 +1,21 @@
+# Railway config for the FastAPI backend service.
+#
+# When creating this service in Railway:
+#   - Root Directory: leave EMPTY (default = repo root).
+#     The Dockerfile builds with the repo root as context so it can
+#     COPY both backend/ and config/.
+#   - Dockerfile Path: backend/Dockerfile
+#
+# Railway will auto-detect this file and apply the settings below.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
+
+[deploy]
+# Railway probes /health; the route is wired in app/api/routes/health.py.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+# Restart on crashes; Railway's default is ON_FAILURE which is fine.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
