@@ -20,3 +20,12 @@ export function getEmployeesWeek(date?: string): Promise<EmployeesWeek> {
 export function getEmployeesMonth(date?: string): Promise<EmployeesMonth> {
   return request("/api/employees/month", employeesMonthSchema, { date });
 }
+
+export function getEmployeesRange(
+  start: string,
+  end: string,
+): Promise<EmployeesMonth> {
+  // Same response shape as /employees/month — backend reuses
+  // EmployeesMonthResponse since the per-employee contract is identical.
+  return request("/api/employees/range", employeesMonthSchema, { start, end });
+}

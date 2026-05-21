@@ -7,7 +7,7 @@ daily costs one too. Zero extra Odoo calls in either path.
 
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_punch_repo, get_roster, parse_date
 from app.infra.roster import RosterProvider
@@ -109,4 +109,51 @@ def employees_month(
         range_start=week_result.range_start,
         range_end=week_result.range_end,
         rows=week_result.rows,
+    )
+
+
+@router.get("/employees/range", response_model=EmployeesMonthResponse)
+def employees_range(
+    start: date = Query(...),
+    end: date = Query(...),
+    roster: RosterProvider = Depends(get_roster),
+    repo: PunchRepository = Depends(get_punch_repo),
+) -> EmployeesMonthResponse:
+    """One row per employee with 1+ punches in an explicit [start, end] range.
+
+    Same shape as /employees/month — reuses the same response model
+    because the row contract is identical (employee + daily children).
+    Drives the Employees tab when the dashboard's custom-range picker
+    is active.
+
+    Speed: one paginated Supabase query for the range. Odoo state
+    reused from cache. Performance scales linearly with range size;
+    a 30-day pick is ~5-6 pages, a 7-day pick is 1-2.
+    """
+    if start > end:
+        # Auto-swap rather than 400, matches the dashboard route's
+        # tolerance for reversed user picks.
+        start, end = end, start
+    # Defensive cap: anything beyond a quarter is almost certainly a
+    # user mistake and risks slow Supabase queries.
+    if (end - start).days > 95:
+        raise HTTPException(
+            status_code=400,
+            detail="Range too large; max 95 days.",
+        )
+    days = iter_days(start, end)
+    punches_by_day = repo.punches_grouped_by_day(start, end)
+    all_punches = [p for plist in punches_by_day.values() for p in plist]
+    employees = roster.employees_from_punches(all_punches)
+    result = build_employees_week(
+        employees=employees,
+        punches_by_day=punches_by_day,
+        days=days,
+        expected_emp_codes=roster.expected_emp_codes(),
+        roster_names=roster.display_names(),
+    )
+    return EmployeesMonthResponse(
+        range_start=result.range_start,
+        range_end=result.range_end,
+        rows=result.rows,
     )

@@ -11,18 +11,24 @@ import type { TooltipContentProps } from "recharts";
 
 import { SidePanel } from "@/components/ui/Panel";
 
-import { useArrivals, type DashboardMode } from "../queries";
+import {
+  useArrivals,
+  type DashboardMode,
+  type DashboardRange,
+} from "../queries";
 
 const ACCENT = "#4F46E5"; // matches --accent token
 
 export function ArrivalHistogram({
   date,
   mode = "daily",
+  range,
 }: {
   date?: string;
   mode?: DashboardMode;
+  range?: DashboardRange;
 }) {
-  const { data } = useArrivals(date, mode);
+  const { data } = useArrivals(date, mode, range);
   const buckets = data?.buckets ?? [];
 
   return (

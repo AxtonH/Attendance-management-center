@@ -11,8 +11,8 @@ import {
 } from "@/lib/format";
 import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
-import { useEmployeesMonth } from "../queries";
-import type { EmployeeWeek, EmployeeWeekDay } from "../types";
+import { useEmployeesMonth, useEmployeesRange } from "../queries";
+import type { EmployeeWeek, EmployeeWeekDay, EmployeesMonth } from "../types";
 
 // Monthly variant of EmployeesWeekTable. The per-employee row shape is
 // identical (we reuse the EmployeeWeek type), but the child table groups
@@ -20,8 +20,52 @@ import type { EmployeeWeek, EmployeeWeekDay } from "../types";
 // scans like a small calendar instead of a flat list. The header drops
 // the `/ expected hours` denominator since a calendar month has no
 // fixed target (variable length, holidays, etc.).
+//
+// The custom-range variant (EmployeesRangeTable, below) renders the
+// exact same body — it just feeds a different data hook in. Keeping
+// both wrappers in this file lets the inner pieces stay private.
+
 export function EmployeesMonthTable({ date }: { date?: string }) {
   const { data, isLoading } = useEmployeesMonth(date);
+  return (
+    <EmployeesRangeBody
+      data={data}
+      isLoading={isLoading}
+      title="Employees this month"
+      emptyText="No punches recorded this month."
+    />
+  );
+}
+
+export function EmployeesRangeTable({
+  start,
+  end,
+}: {
+  start: string | null;
+  end: string | null;
+}) {
+  const { data, isLoading } = useEmployeesRange(start, end);
+  return (
+    <EmployeesRangeBody
+      data={data}
+      isLoading={isLoading}
+      title="Employees in range"
+      emptyText="No punches recorded in this range."
+    />
+  );
+}
+
+function EmployeesRangeBody({
+  data,
+  isLoading,
+  title,
+  emptyText,
+}: {
+  data: EmployeesMonth | undefined;
+  isLoading: boolean;
+  title: string;
+  emptyText: string;
+}) {
   const { buffer, clear } = useTypeAheadFilter();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
@@ -44,7 +88,7 @@ export function EmployeesMonthTable({ date }: { date?: string }) {
   return (
     <Panel>
       <PanelHeader
-        title="Employees this month"
+        title={title}
         subtitle={`${rows.length} of ${data?.rows.length ?? 0} shown`}
         right={<FilterChip buffer={buffer} onClear={clear} />}
       />
@@ -65,9 +109,7 @@ export function EmployeesMonthTable({ date }: { date?: string }) {
       )}
       {!isLoading && rows.length === 0 && (
         <p className="px-[18px] py-6 text-center text-[13px] text-text-tertiary">
-          {buffer
-            ? `No employee matches “${buffer}”.`
-            : "No punches recorded this month."}
+          {buffer ? `No employee matches “${buffer}”.` : emptyText}
         </p>
       )}
       {rows.map((row) => (

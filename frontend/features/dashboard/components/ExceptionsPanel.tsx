@@ -1,10 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
-import { useExceptions, type DashboardMode } from "../queries";
+import {
+  useExceptions,
+  type DashboardMode,
+  type DashboardRange,
+} from "../queries";
 import type { ExceptionItem, FilterType } from "../types";
 
 const FILTERS: { value: FilterType; label: string }[] = [
@@ -82,14 +87,40 @@ const SUBTITLE_MONTHLY: Record<FilterType, SubtitleCopy> = {
   },
 };
 
+const SUBTITLE_CUSTOM: Record<FilterType, SubtitleCopy> = {
+  all: { singular: "violation in range", plural: "violations in range" },
+  absent: {
+    singular: "Prezlaber absent in range",
+    plural: "Prezlabers absent in range",
+  },
+  missing_punch: {
+    singular: "Prezlaber missing a punch in range",
+    plural: "Prezlabers missing a punch in range",
+  },
+  incomplete_hours: {
+    singular: "Prezlaber short on hours in range",
+    plural: "Prezlabers short on hours in range",
+  },
+  late: {
+    singular: "Prezlaber late in range",
+    plural: "Prezlabers late in range",
+  },
+  review: {
+    singular: "Prezlaber to review in range",
+    plural: "Prezlabers to review in range",
+  },
+};
+
 const PAGE_SIZE = 6;
 
 export function ExceptionsPanel({
   date,
   mode = "daily",
+  range,
 }: {
   date?: string;
   mode?: DashboardMode;
+  range?: DashboardRange;
 }) {
   const [filter, setFilter] = useState<FilterType>("all");
   const [expanded, setExpanded] = useState(false);
@@ -97,9 +128,26 @@ export function ExceptionsPanel({
   // open/closed state survives polling refreshes — same pattern as
   // EmployeesWeekTable. Daily/weekly rows ignore this set.
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
-  const { data, isLoading } = useExceptions(date, mode);
+  // Page-level type-ahead — same hook the Employees tables use. Buffer
+  // is global to the page (one hook instance per panel), so users can
+  // start typing anywhere to narrow the flag list by name/department.
+  const { buffer, clear: clearBuffer } = useTypeAheadFilter();
+  const { data, isLoading } = useExceptions(date, mode, range);
   const allItems = data?.items ?? [];
-  const items = filter === "all" ? allItems : allItems.filter((i) => i.tag === filter);
+  // Apply tag chip filter first, then type-ahead name/department filter.
+  // Memoized because the search runs on every keystroke; on a typical
+  // dashboard with ~30 rows it's microseconds, but the habit is cheap.
+  const items = useMemo(() => {
+    const byTag =
+      filter === "all" ? allItems : allItems.filter((i) => i.tag === filter);
+    if (!buffer) return byTag;
+    const needle = buffer.toLowerCase();
+    return byTag.filter(
+      (i) =>
+        i.name.toLowerCase().includes(needle) ||
+        i.department.toLowerCase().includes(needle),
+    );
+  }, [allItems, filter, buffer]);
   const visible = expanded ? items : items.slice(0, PAGE_SIZE);
 
   const toggleRow = (key: string) => {
@@ -116,7 +164,9 @@ export function ExceptionsPanel({
       ? SUBTITLE_MONTHLY
       : mode === "weekly"
         ? SUBTITLE_WEEKLY
-        : SUBTITLE_DAILY;
+        : mode === "custom"
+          ? SUBTITLE_CUSTOM
+          : SUBTITLE_DAILY;
   const subtitleCopy = subtitleTable[filter];
   const subtitle = `${items.length} ${
     items.length === 1 ? subtitleCopy.singular : subtitleCopy.plural
@@ -147,24 +197,45 @@ export function ExceptionsPanel({
         }
       />
 
+      {/* Active type-ahead chip. Only rendered when the buffer has
+          content so the panel stays uncluttered in the common case. */}
+      {buffer && (
+        <div className="flex items-center justify-between border-b border-border bg-bg-subtle px-[18px] py-[8px] text-[12px] text-text-secondary">
+          <span>
+            Showing {items.length} of {allItems.length} matching “{buffer}”
+          </span>
+          <button
+            type="button"
+            onClick={clearBuffer}
+            className="flex items-center gap-2 rounded-md bg-bg-muted px-[10px] py-[4px] text-[11px] font-medium text-text-primary"
+            title="Click or press Esc to clear"
+          >
+            <span>Filter: “{buffer}”</span>
+            <span className="text-text-tertiary">×</span>
+          </button>
+        </div>
+      )}
+
       {isLoading && (
         <div className="p-[18px] text-[12px] text-text-tertiary">Loading…</div>
       )}
       {!isLoading && items.length === 0 && (
         <div className="p-[18px] text-[12px] text-text-tertiary">
-          Nothing to flag right now.
+          {buffer
+            ? `No flags match “${buffer}”.`
+            : "Nothing to flag right now."}
         </div>
       )}
 
       {visible.map((item) => {
         const key = `${item.tag}:${item.emp_code}`;
-        // Only monthly rows are expandable, and only when there's a
-        // multi-day occurrence list to reveal. Daily and weekly rows
-        // stay static.
+        // Rows are expandable whenever the backend emitted occurrences.
+        // That signal already matches "monthly visual treatment" — the
+        // backend emits occurrences exactly when chips are suppressed
+        // (monthly mode + custom ranges > 7 days). Daily and weekly
+        // rows have `occurrences == null` and stay static.
         const expandable =
-          mode === "monthly" &&
-          item.occurrences != null &&
-          item.occurrences.length > 0;
+          item.occurrences != null && item.occurrences.length > 0;
         return (
           <ExceptionRow
             key={key}

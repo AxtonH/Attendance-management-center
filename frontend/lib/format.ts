@@ -53,12 +53,12 @@ export function formatMonthLabel(iso: string): string {
 }
 
 /**
- * Render a Sun–Sat week as "10 May – 16 May 2026". When the range spans
- * two months it expands to "28 Apr – 4 May 2026"; spanning two years
- * shows both years.
+ * Render an arbitrary date range with smart compression:
+ *   - Same month/year:  "10 – 16 May 2026"
+ *   - Same year:        "28 Apr – 4 May 2026"
+ *   - Different years:  "28 Dec 2025 – 4 Jan 2026"
  */
-export function formatWeekRange(iso: string): string {
-  const { start, end } = weekRangeFor(iso);
+export function formatDateRange(start: Date, end: Date): string {
   const dayMonth = new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
@@ -82,6 +82,26 @@ export function formatWeekRange(iso: string): string {
     return `${dayMonth.format(start)} – ${dayMonthYear.format(end)}`;
   }
   return `${dayMonthYear.format(start)} – ${dayMonthYear.format(end)}`;
+}
+
+/**
+ * Render a Sun–Sat week as "10 – 16 May 2026". When the range spans
+ * two months it expands to "28 Apr – 4 May 2026"; spanning two years
+ * shows both years. Thin wrapper over formatDateRange for the weekly
+ * header use case.
+ */
+export function formatWeekRange(iso: string): string {
+  const { start, end } = weekRangeFor(iso);
+  return formatDateRange(start, end);
+}
+
+/**
+ * Render an arbitrary ISO range "YYYY-MM-DD" to "YYYY-MM-DD" with the
+ * same smart compression as formatWeekRange. Used by the custom-range
+ * header label on the dashboard.
+ */
+export function formatIsoRange(startIso: string, endIso: string): string {
+  return formatDateRange(parseIsoDate(startIso), parseIsoDate(endIso));
 }
 
 /** "09:05" from an ISO datetime string. Returns "—" if input is null/invalid. */

@@ -3,12 +3,13 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 
-export type DashboardMode = "daily" | "weekly" | "monthly";
+export type DashboardMode = "daily" | "weekly" | "monthly" | "custom";
 
 const VALID: ReadonlySet<DashboardMode> = new Set([
   "daily",
   "weekly",
   "monthly",
+  "custom",
 ]);
 
 /**

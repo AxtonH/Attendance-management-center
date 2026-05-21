@@ -39,7 +39,7 @@ FilterType = Literal[
     "all", "late", "absent", "missing_punch", "incomplete_hours", "review"
 ]
 
-Mode = Literal["daily", "weekly", "monthly"]
+Mode = Literal["daily", "weekly", "monthly", "custom"]
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
@@ -47,9 +47,23 @@ def dashboard(
     day: date = Depends(parse_date),
     now: datetime = Depends(now_in_tz),
     mode: Mode = Query(default="daily"),
+    start: date | None = Query(default=None),
+    end: date | None = Query(default=None),
     roster: RosterProvider = Depends(get_roster),
     repo: PunchRepository = Depends(get_punch_repo),
 ) -> DashboardResponse:
+    if mode == "custom":
+        # Custom range. If only start is given, treat as a single-day
+        # range (matches user behavior: clicking one date and confirming).
+        # If start == end, also fall through to daily so the tile copy
+        # reads naturally — same behavior as the weekly/monthly presets.
+        s = start or day
+        e = end or s
+        if s > e:
+            s, e = e, s
+        if s == e:
+            return _build_daily(s, now, roster, repo)
+        return _build_range(s, now, roster, repo, kind="custom", end=e)
     if mode == "monthly":
         return _build_range(day, now, roster, repo, kind="monthly")
     if mode == "weekly":
@@ -92,23 +106,32 @@ def _build_range(
     roster: RosterProvider,
     repo: PunchRepository,
     *,
-    kind: Literal["weekly", "monthly"],
+    kind: Literal["weekly", "monthly", "custom"],
+    end: date | None = None,
 ) -> DashboardResponse:
-    """Unified multi-day builder. Weekly and monthly share aggregators —
-    only the date range, the response's mode label, and the exception
-    chip strategy differ.
+    """Unified multi-day builder. Weekly, monthly, and custom share the
+    same aggregators — only the date range, the response's mode label,
+    and the exception chip strategy differ.
+
+    For weekly/monthly the range is derived from `day` (the anchor).
+    For custom the caller provides both `day` (= start) and `end`.
 
     Performance: one paginated Supabase round-trip for the whole range.
     Odoo state is reused from cache. A month query is ~5-6 pages, a week
     is 1-2; both are well under a second on typical Prezlab data.
     """
     if kind == "monthly":
-        start, end = month_range_for(day)
+        start, range_end = month_range_for(day)
+    elif kind == "weekly":
+        start, range_end = week_range_for(day)
     else:
-        start, end = week_range_for(day)
-    days = iter_days(start, end)
+        # Custom: caller passes both edges. Defensive fallback for end
+        # missing keeps the function callable in isolation.
+        start = day
+        range_end = end if end is not None else day
+    days = iter_days(start, range_end)
 
-    punches_by_day = repo.punches_grouped_by_day(start, end)
+    punches_by_day = repo.punches_grouped_by_day(start, range_end)
 
     # The aggregator wants `employees` for name/department lookups when
     # the Odoo roster doesn't have a code — flatten all punches so the
@@ -118,9 +141,12 @@ def _build_range(
 
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
 
-    # Monthly: drop day chips on exception rows (a chronic offender
-    # could have 20+ days). The detail line absorbs the count instead.
-    show_day_chips = kind == "weekly"
+    # Chip strategy mirrors the visible range size: a week's worth of
+    # chips is fine, more than that explodes visually. Use the same
+    # 7-day cutoff for custom ranges as the implicit weekly/monthly split.
+    show_day_chips = kind == "weekly" or (
+        kind == "custom" and len(days) <= 7
+    )
 
     return build_weekly_dashboard(
         employees=employees,

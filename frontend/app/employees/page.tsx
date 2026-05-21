@@ -4,16 +4,21 @@ import { Suspense } from "react";
 
 import { DatePickerButton } from "@/components/ui/DatePickerButton";
 import { DateTabs } from "@/features/dashboard/components/DateTabs";
-import { EmployeesMonthTable } from "@/features/employees/components/EmployeesMonthTable";
+import {
+  EmployeesMonthTable,
+  EmployeesRangeTable,
+} from "@/features/employees/components/EmployeesMonthTable";
 import { EmployeesTable } from "@/features/employees/components/EmployeesTable";
 import { EmployeesWeekTable } from "@/features/employees/components/EmployeesWeekTable";
 import {
   formatIsoFullDate,
+  formatIsoRange,
   formatMonthLabel,
   formatWeekRange,
 } from "@/lib/format";
 import { useDateParam } from "@/lib/useDateParam";
 import { useModeParam } from "@/lib/useModeParam";
+import { useRangeParam } from "@/lib/useRangeParam";
 
 export default function EmployeesPage() {
   return (
@@ -26,24 +31,47 @@ export default function EmployeesPage() {
 function EmployeesContent() {
   const { date, isToday } = useDateParam();
   const { mode, setMode } = useModeParam();
-  // Range-derived header text. Computed client-side so the page reads
-  // correctly without waiting on the API.
+  const { start, end, clear: clearRange } = useRangeParam();
+
+  // Treat custom mode as valid only when both range edges are present
+  // AND they're different (same-day custom collapses to daily, matching
+  // the picker's behavior on the dashboard).
+  const effectiveMode =
+    mode === "custom" && start && end && start !== end ? "custom" : mode;
+
   const tabValue =
-    mode === "weekly" ? "Weekly" : mode === "monthly" ? "Monthly" : "Daily";
+    effectiveMode === "weekly"
+      ? "Weekly"
+      : effectiveMode === "monthly"
+        ? "Monthly"
+        : "Daily";
+
   const headerLabel =
-    mode === "weekly"
-      ? formatWeekRange(date)
-      : mode === "monthly"
-        ? formatMonthLabel(date)
-        : formatIsoFullDate(date);
+    effectiveMode === "custom" && start && end
+      ? formatIsoRange(start, end)
+      : effectiveMode === "weekly"
+        ? formatWeekRange(date)
+        : effectiveMode === "monthly"
+          ? formatMonthLabel(date)
+          : formatIsoFullDate(date);
+
   const overviewLabel =
-    mode === "weekly"
-      ? "Employees this week"
-      : mode === "monthly"
-        ? "Employees this month"
-        : isToday
-          ? "Employees"
-          : "Historic employees";
+    effectiveMode === "custom"
+      ? "Employees in range"
+      : effectiveMode === "weekly"
+        ? "Employees this week"
+        : effectiveMode === "monthly"
+          ? "Employees this month"
+          : isToday
+            ? "Employees"
+            : "Historic employees";
+
+  // Clicking a preset tab while custom range is active clears the range
+  // so the preset's own date logic takes over — matches dashboard.
+  const onTabChange = (t: "Daily" | "Weekly" | "Monthly") => {
+    if (effectiveMode === "custom") clearRange();
+    setMode(t === "Weekly" ? "weekly" : t === "Monthly" ? "monthly" : "daily");
+  };
 
   return (
     <main className="mx-auto max-w-[1200px] px-10 py-8 pb-12">
@@ -55,20 +83,28 @@ function EmployeesContent() {
           <div className="mt-1 flex items-center gap-3">
             <h1 className="text-[22px] font-medium">{headerLabel}</h1>
             <DatePickerButton />
+            {effectiveMode === "custom" && (
+              <button
+                type="button"
+                onClick={clearRange}
+                className="flex items-center gap-2 rounded-md bg-bg-muted px-[10px] py-[4px] text-[12px] font-medium text-text-primary"
+                title="Clear custom range"
+              >
+                <span>Custom range</span>
+                <span className="text-text-tertiary">×</span>
+              </button>
+            )}
           </div>
         </div>
-        <DateTabs
-          value={tabValue}
-          onChange={(t) =>
-            setMode(
-              t === "Weekly" ? "weekly" : t === "Monthly" ? "monthly" : "daily",
-            )
-          }
-        />
+        <DateTabs value={tabValue} onChange={onTabChange} />
       </header>
-      {mode === "monthly" ? (
+      {effectiveMode === "custom" ? (
+        // Custom range uses the same week-grouped layout as monthly —
+        // the only difference is which dates feed in.
+        <EmployeesRangeTable start={start} end={end} />
+      ) : effectiveMode === "monthly" ? (
         <EmployeesMonthTable date={date} />
-      ) : mode === "weekly" ? (
+      ) : effectiveMode === "weekly" ? (
         <EmployeesWeekTable date={date} />
       ) : (
         <EmployeesTable date={date} />

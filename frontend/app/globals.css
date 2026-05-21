@@ -6,3 +6,26 @@ html, body {
   font-size: 14px;
   line-height: 1.5;
 }
+
+/* ------------------------------------------------------------------ */
+/* Range picker modifiers (DatePickerButton).
+   We bypass react-day-picker's mode="range" and paint the band
+   manually via these custom modifier classes. */
+/* ------------------------------------------------------------------ */
+
+.rdp-in-range .rdp-day_button,
+.rdp-in-range button {
+  background-color: rgb(79 70 229 / 0.12);     /* soft accent band */
+  color: rgb(17 24 39);
+  border-radius: 0;
+}
+.rdp-range-start .rdp-day_button,
+.rdp-range-start button,
+.rdp-range-end .rdp-day_button,
+.rdp-range-end button {
+  background-color: rgb(79 70 229);            /* solid accent */
+  color: white;
+  border-radius: 9999px;
+}
+/* When start == end (single-day highlight), the same cell gets both
+   modifiers — solid pill handles it correctly. */

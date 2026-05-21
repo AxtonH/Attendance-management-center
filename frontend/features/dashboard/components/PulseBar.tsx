@@ -2,20 +2,32 @@
 
 import { Tile, TileLabel, TileValue } from "@/components/ui/Tile";
 
-import { useOverview, type DashboardMode } from "../queries";
+import {
+  useOverview,
+  type DashboardMode,
+  type DashboardRange,
+} from "../queries";
 
 export function PulseBar({
   date,
   mode = "daily",
+  range,
 }: {
   date?: string;
   mode?: DashboardMode;
+  range?: DashboardRange;
 }) {
-  const { data, isLoading, isError } = useOverview(date, mode);
+  const { data, isLoading, isError } = useOverview(date, mode, range);
   // In range modes the numbers are sums (or distinct people for Present);
   // suffix makes that explicit so 14 Late doesn't read as 14 lates today.
   const suffix =
-    mode === "weekly" ? " this week" : mode === "monthly" ? " this month" : "";
+    mode === "weekly"
+      ? " this week"
+      : mode === "monthly"
+        ? " this month"
+        : mode === "custom"
+          ? " in range"
+          : "";
 
   return (
     <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
