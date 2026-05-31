@@ -15,6 +15,7 @@ from app.config import Settings, get_settings
 from app.infra.odoo_calendars import OdooCalendarRepository
 from app.infra.odoo_client import OdooClient
 from app.infra.odoo_employees import OdooEmployeeRepository
+from app.infra.odoo_timesheets import OdooTimesheetRepository
 from app.infra.roster import (
     OdooRosterProvider,
     PunchDerivedRosterProvider,
@@ -47,11 +48,13 @@ def _odoo_roster_singleton(
     calendars = OdooCalendarRepository(
         client, cache_ttl_seconds=cache_ttl, batch_size=batch_size
     )
+    timesheets = OdooTimesheetRepository(client, batch_size=batch_size)
     fallback = _punch_derived_roster_singleton(config_dir)
     return OdooRosterProvider(
         odoo_employees=employees,
         odoo_calendars=calendars,
         fallback=fallback,
+        odoo_timesheets=timesheets,
     )
 
 

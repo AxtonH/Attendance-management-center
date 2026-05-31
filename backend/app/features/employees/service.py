@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from typing import Mapping
 
+from app.shared import shift_rules
 from app.shared.models import Employee, Punch, ShiftRule
 
 from app.features.employees.models import (
@@ -23,6 +24,10 @@ def build_employees_today(
     *,
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
+    rule: ShiftRule | None = None,
+    now: datetime | None = None,
+    working_emp_codes: frozenset[str] | None = None,
+    on_leave_emp_codes: frozenset[str] | None = None,
 ) -> EmployeesTodayResponse:
     """One row per employee: first and last punch of the day.
 
@@ -33,7 +38,20 @@ def build_employees_today(
     appear in the table — keeps this view consistent with the Present/Absent
     tile counts. Names come from `roster_names` (Odoo) when available, then
     from the punch-derived `employees` list (BioTime) as fallback.
+
+    When `rule` and `now` are also provided, roster employees who were
+    expected today but never punched are appended as absent rows (null
+    punches, `absent=True`) — same conditions as the dashboard's absent
+    detector: not a WFH weekday, past the absent cutoff, and (if
+    `working_emp_codes` is given) on the schedule for `day`. The weekly
+    builder doesn't pass these, so per-day punch grouping is unaffected.
+
+    `on_leave_emp_codes` (when given) is the set of emp_codes with an
+    approved full-day Time Off entry today. Such an employee, if they'd
+    otherwise be absent, is emitted as an on-leave row (`on_leave=True`,
+    `absent=False`) instead — they were excused, not missing.
     """
+    on_leave = on_leave_emp_codes or frozenset()
     by_code: dict[str, list[datetime]] = {}
     for p in punches:
         if not p.emp_code:
@@ -75,6 +93,45 @@ def build_employees_today(
                 worked_minutes=worked_minutes,
             )
         )
+
+    # Append absent rows — roster employees expected today who never
+    # punched. Gated on the same conditions as the dashboard's
+    # `detect_absent` so the two views never disagree: we need a roster,
+    # a rule + clock to evaluate the cutoff, it can't be a WFH weekday,
+    # and `now` must be past the absent cutoff. Skipped entirely when the
+    # absence inputs aren't supplied (e.g. the weekly per-day path).
+    if (
+        expected_emp_codes is not None
+        and rule is not None
+        and now is not None
+        and day.weekday() not in rule.wfh_weekdays
+        and now >= shift_rules.absent_cutoff_dt(rule, day)
+    ):
+        roster = expected_emp_codes
+        if working_emp_codes is not None:
+            roster = roster & working_emp_codes
+        punched = set(by_code.keys())
+        for code in roster - punched:
+            name = roster_names.get(code)
+            if not name:
+                # Roster code with no Odoo name → not a real employee,
+                # same drop rule the present-row branch applies.
+                continue
+            # An approved full-day Time Off entry excuses the absence: emit
+            # an on-leave row instead so it reads as planned, not missing.
+            is_on_leave = code in on_leave
+            rows.append(
+                EmployeeDay(
+                    emp_code=code,
+                    name=name,
+                    punch_in=None,
+                    punch_out=None,
+                    worked_minutes=None,
+                    absent=not is_on_leave,
+                    on_leave=is_on_leave,
+                )
+            )
+
     return EmployeesTodayResponse(date=day.isoformat(), rows=rows)
 
 
@@ -86,31 +143,54 @@ def build_employees_week(
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
     rule: ShiftRule | None = None,
+    now: datetime | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    on_leave_emp_codes_by_day: Mapping[date, frozenset[str]] | None = None,
 ) -> EmployeesWeekResponse:
-    """One parent row per employee with a child row per day they punched.
+    """One parent row per employee with a child row per day in range.
 
     Composition over `build_employees_today`: we call it once per day in
     the range, then group the resulting `EmployeeDay`s by emp_code. That
-    means the name-resolution and roster-filter rules stay identical
-    between Daily and Weekly views — no logic drift.
+    means the name-resolution, roster-filter, and absent-detection rules
+    stay identical between Daily and Weekly views — no logic drift.
 
-    Days an employee didn't punch are simply absent from their child list
-    (per the design decision to hide off-days). Employees who never
-    punched all week don't appear at all — "1+ entry" filtering happens
-    naturally as a side effect.
+    When `rule` and `now` are provided alongside a roster, the per-day
+    call also emits absent rows (scheduled in-office days an employee
+    missed), which become `absent=True` child days here. Employees who
+    never punched but were scheduled on at least one in-office day in the
+    range still get a parent row — all of whose child days are absent. A
+    day only counts as absent once it's settled (past that day's absent
+    cutoff), so the current day pre-cutoff never shows phantom absences.
+
+    Without `rule`/`now` (phase-1, or the monthly/range endpoints that
+    don't pass them) the old behavior holds: only punched days appear and
+    fully-absent employees are omitted.
+
+    `on_leave_emp_codes_by_day` maps each day to the emp_codes on approved
+    full-day Time Off that day; those days surface as `on_leave=True`
+    children (and the person gets a parent row even if fully on leave).
+
+    `days_worked` and `total_worked_minutes` count worked days only —
+    absent and on-leave child days never contribute.
 
     Per-employee `expected_days` counts in-office workdays for the week:
     days the schedule covers them MINUS WFH days (Prezlab's Thursday).
     When `rule` and `working_emp_codes_by_day` are not provided the
     expecteds default to 0 — phase-1 behavior, no schedule data.
     """
+    absence_enabled = (
+        expected_emp_codes is not None and rule is not None and now is not None
+    )
+
     # emp_code → {name, days: [EmployeeWeekDay], total_minutes, days_worked}
     by_code: dict[str, dict] = {}
 
     for day in days:
         day_punches = punches_by_day.get(day, [])
-        if not day_punches:
+        # When absence detection is off we keep the original fast-path:
+        # skip days nobody punched. With it on we must still visit empty
+        # days so a company-wide or fully-absent miss surfaces.
+        if not day_punches and not absence_enabled:
             continue
         per_day = build_employees_today(
             employees,
@@ -118,11 +198,23 @@ def build_employees_week(
             day,
             expected_emp_codes=expected_emp_codes,
             roster_names=roster_names,
+            rule=rule if absence_enabled else None,
+            now=now if absence_enabled else None,
+            working_emp_codes=(
+                working_emp_codes_by_day.get(day)
+                if absence_enabled and working_emp_codes_by_day is not None
+                else None
+            ),
+            on_leave_emp_codes=(
+                on_leave_emp_codes_by_day.get(day)
+                if absence_enabled and on_leave_emp_codes_by_day is not None
+                else None
+            ),
         )
         for row in per_day.rows:
             entry = by_code.setdefault(
                 row.emp_code,
-                {"name": row.name, "days": [], "total_minutes": 0},
+                {"name": row.name, "days": [], "total_minutes": 0, "days_worked": 0},
             )
             entry["days"].append(
                 EmployeeWeekDay(
@@ -130,8 +222,14 @@ def build_employees_week(
                     punch_in=row.punch_in,
                     punch_out=row.punch_out,
                     worked_minutes=row.worked_minutes,
+                    absent=row.absent,
+                    on_leave=row.on_leave,
                 )
             )
+            # A worked day is one with a real punch — neither absent nor
+            # on leave. (Absent and on-leave rows both have no punch.)
+            if not row.absent and not row.on_leave:
+                entry["days_worked"] += 1
             if row.worked_minutes is not None:
                 entry["total_minutes"] += row.worked_minutes
 
@@ -164,7 +262,7 @@ def build_employees_week(
             EmployeeWeek(
                 emp_code=code,
                 name=entry["name"],
-                days_worked=len(entry["days"]),
+                days_worked=entry["days_worked"],
                 expected_days=expected_days,
                 total_worked_minutes=entry["total_minutes"],
                 expected_minutes=expected_days * full_day,

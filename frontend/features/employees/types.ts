@@ -5,9 +5,11 @@ import { z } from "zod";
 export const employeeDaySchema = z.object({
   emp_code: z.string(),
   name: z.string(),
-  punch_in: z.string(),  // ISO datetime string
+  punch_in: z.string().nullable(),  // ISO datetime string; null when absent / on leave
   punch_out: z.string().nullable(),
   worked_minutes: z.number().int().nonnegative().nullable(),
+  absent: z.boolean(),
+  on_leave: z.boolean(),
 });
 export type EmployeeDay = z.infer<typeof employeeDaySchema>;
 
@@ -21,9 +23,11 @@ export type EmployeesToday = z.infer<typeof employeesTodaySchema>;
 // days they punched. Mirrors backend EmployeesWeekResponse.
 export const employeeWeekDaySchema = z.object({
   date: z.string(),  // ISO YYYY-MM-DD
-  punch_in: z.string(),
+  punch_in: z.string().nullable(),  // null when absent / on leave
   punch_out: z.string().nullable(),
   worked_minutes: z.number().int().nonnegative().nullable(),
+  absent: z.boolean(),
+  on_leave: z.boolean(),
 });
 export type EmployeeWeekDay = z.infer<typeof employeeWeekDaySchema>;
 

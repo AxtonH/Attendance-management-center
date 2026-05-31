@@ -22,7 +22,28 @@ import yaml
 from app.infra.calendar_parser import PREZLAB_DEFAULT_DAYS
 from app.infra.odoo_calendars import OdooCalendarRepository
 from app.infra.odoo_employees import OdooEmployeeRepository
+from app.infra.odoo_timesheets import OdooTimesheetRepository
 from app.shared.models import Department, Employee, Punch, ShiftRule
+
+
+def exclude_on_leave(
+    working: frozenset[str] | None,
+    on_leave: frozenset[str] | None,
+) -> frozenset[str] | None:
+    """Remove on-leave emp_codes from a day's working (in-office) set.
+
+    People on approved full-day leave aren't expected in the office that
+    day, so they drop out of the universe the dashboard uses for Present /
+    Absent math and the department rollup — keeping the dashboard tab
+    consistent with the Employees tab's "On leave" treatment.
+
+    `working is None` is the phase-1 "no schedule info" sentinel; it's
+    preserved as-is (we never fabricate a working set from leave data
+    alone). `on_leave` None/empty is a no-op. Pure; no I/O.
+    """
+    if working is None or not on_leave:
+        return working
+    return working - on_leave
 
 
 class RosterProvider(Protocol):
@@ -33,6 +54,9 @@ class RosterProvider(Protocol):
     def display_names(self) -> Mapping[str, str]: ...
     def working_emp_codes_for(self, day: date) -> frozenset[str] | None: ...
     def department_by_emp_code(self) -> Mapping[str, str]: ...
+    def on_leave_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None: ...
 
 
 class PunchDerivedRosterProvider:
@@ -96,6 +120,13 @@ class PunchDerivedRosterProvider:
         # will skip the section (or render an empty list, per its choice).
         return {}
 
+    def on_leave_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None:
+        # Phase 1: no timesheet/leave data. None signals "no leave info —
+        # don't reclassify any absence as on-leave".
+        return None
+
 
 class OdooRosterProvider:
     """Phase 2 implementation: roster comes from Odoo.
@@ -114,9 +145,11 @@ class OdooRosterProvider:
         odoo_employees: OdooEmployeeRepository,
         odoo_calendars: OdooCalendarRepository,
         fallback: PunchDerivedRosterProvider,
+        odoo_timesheets: OdooTimesheetRepository | None = None,
     ) -> None:
         self._odoo_employees = odoo_employees
         self._odoo_calendars = odoo_calendars
+        self._odoo_timesheets = odoo_timesheets
         self._fallback = fallback
 
     def employees_from_punches(self, punches: list[Punch]) -> list[Employee]:
@@ -163,3 +196,19 @@ class OdooRosterProvider:
             if weekday in days:
                 working.add(code)
         return frozenset(working)
+
+    def on_leave_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None:
+        """Full-day leave per day in [start, end], keyed by emp_code.
+
+        Composes the timesheet repo (raw leave lines) with the employee
+        repo's id→code map (already cached) so leave lines resolve to our
+        canonical emp_codes. Returns None when no timesheet repo is wired —
+        callers then skip leave reclassification entirely.
+        """
+        if self._odoo_timesheets is None:
+            return None
+        return self._odoo_timesheets.on_leave_emp_codes_for_range(
+            start, end, self._odoo_employees.emp_code_by_odoo_id()
+        )

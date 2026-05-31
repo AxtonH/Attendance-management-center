@@ -8,6 +8,7 @@ import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
 import { useEmployeesToday } from "../queries";
 import type { EmployeeDay } from "../types";
+import { AbsentPill, OnLeavePill } from "./AbsentPill";
 
 function sortRows(rows: EmployeeDay[]): EmployeeDay[] {
   // emp_code descending. Numeric where possible, lexical as a fallback.
@@ -79,7 +80,13 @@ export function EmployeesTable({ date }: { date?: string }) {
                   {formatTime(r.punch_out)}
                 </td>
                 <td className="px-[18px] py-[12px] text-text-secondary">
-                  {formatWorkedMinutes(r.worked_minutes)}
+                  {r.on_leave ? (
+                    <OnLeavePill />
+                  ) : r.absent ? (
+                    <AbsentPill />
+                  ) : (
+                    formatWorkedMinutes(r.worked_minutes)
+                  )}
                 </td>
               </tr>
             ))}

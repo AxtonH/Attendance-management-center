@@ -77,6 +77,10 @@ class _CacheEntry:
     # emp_code → department display name. "" when the employee has no
     # department set (shown as "Unassigned" in the rollup).
     departments: Mapping[str, str]
+    # Odoo hr.employee id → emp_code. Lets callers resolve records that
+    # reference employees by id (e.g. account.analytic.line.employee_id)
+    # back to our canonical emp_code without a second round-trip.
+    emp_code_by_odoo_id: Mapping[int, str]
     fetched_at: float
 
 
@@ -114,6 +118,10 @@ class OdooEmployeeRepository:
     def departments(self) -> Mapping[str, str]:
         return self._get_cache().departments
 
+    def emp_code_by_odoo_id(self) -> Mapping[int, str]:
+        """Odoo hr.employee id → emp_code, for resolving id references."""
+        return self._get_cache().emp_code_by_odoo_id
+
     def invalidate(self) -> None:
         with self._lock:
             self._cache = None
@@ -147,12 +155,13 @@ class OdooEmployeeRepository:
         rows = self._client.search_read(
             EMPLOYEE_MODEL,
             domain,
-            [EMP_CODE_FIELD, NAME_FIELD, CALENDAR_FIELD, DEPARTMENT_FIELD],
+            ["id", EMP_CODE_FIELD, NAME_FIELD, CALENDAR_FIELD, DEPARTMENT_FIELD],
             batch_size=self._batch_size,
         )
         names: dict[str, str] = {}
         calendars: dict[str, int | None] = {}
         departments: dict[str, str] = {}
+        emp_code_by_odoo_id: dict[int, str] = {}
         for row in rows:
             code = _normalize_emp_code(row.get(EMP_CODE_FIELD))
             if code is None:
@@ -160,12 +169,16 @@ class OdooEmployeeRepository:
             names[code] = _normalize_name(row.get(NAME_FIELD), code)
             calendars[code] = _many2one_id(row.get(CALENDAR_FIELD))
             departments[code] = _many2one_name(row.get(DEPARTMENT_FIELD))
+            odoo_id = row.get("id")
+            if isinstance(odoo_id, int):
+                emp_code_by_odoo_id[odoo_id] = code
         logger.info("Odoo hr.employee → %d attendance-enrolled employees", len(names))
         return _CacheEntry(
             names=MappingProxyType(names),
             codes=frozenset(names.keys()),
             calendar_ids=MappingProxyType(calendars),
             departments=MappingProxyType(departments),
+            emp_code_by_odoo_id=MappingProxyType(emp_code_by_odoo_id),
             fetched_at=time.monotonic(),
         )
 

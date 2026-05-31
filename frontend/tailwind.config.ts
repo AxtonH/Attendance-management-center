@@ -36,6 +36,9 @@ const config: Config = {
         },
         warning: { bg: "#FEF3C7", text: "#92400E" },
         danger: { bg: "#FEE2E2", text: "#991B1B" },
+        // Pale light blue — the "On leave" pill counterpart to danger's
+        // red Absent pill. Excused absence reads calm, not alarming.
+        leave: { bg: "#DBEAFE", text: "#1E40AF" },
         severity: {
           high: "#B91C1C",
           med: "#B45309",

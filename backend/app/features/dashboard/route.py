@@ -12,7 +12,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_punch_repo, get_roster, now_in_tz, parse_date
-from app.infra.roster import RosterProvider
+from app.infra.roster import RosterProvider, exclude_on_leave
 from app.infra.supabase_client import PunchRepository
 
 from app.features.dashboard.models import (
@@ -84,6 +84,11 @@ def _build_daily(
     working_prev = (
         roster.working_emp_codes_for(prev_day) if prev_day is not None else None
     )
+    # Drop on-leave people from the in-office universe so the Absent tile /
+    # flags / rollup match the Employees tab's "On leave" treatment.
+    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
+    if leave_by_day is not None:
+        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
     return build_dashboard(
         employees=employees,
         punches=punches,
@@ -141,6 +146,15 @@ def _build_range(
 
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
 
+    # Drop on-leave people per day from the in-office universe so weekly /
+    # monthly / custom Absent counts and flags exclude approved leave,
+    # consistent with the daily view and the Employees tab.
+    leave_by_day = roster.on_leave_emp_codes_for_range(start, range_end)
+    if leave_by_day is not None:
+        working_by_day = {
+            d: exclude_on_leave(working_by_day[d], leave_by_day.get(d)) for d in days
+        }
+
     # Chip strategy mirrors the visible range size: a week's worth of
     # chips is fine, more than that explodes visually. Use the same
     # 7-day cutoff for custom ranges as the implicit weekly/monthly split.
@@ -172,6 +186,10 @@ def overview(
 ) -> OverviewResponse:
     punches = repo.punches_for_day(day)
     employees = roster.employees_from_punches(punches)
+    working_today = roster.working_emp_codes_for(day)
+    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
+    if leave_by_day is not None:
+        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
     return build_overview(
         employees,
         punches,
@@ -179,7 +197,7 @@ def overview(
         day,
         now,
         expected_emp_codes=roster.expected_emp_codes(),
-        working_emp_codes=roster.working_emp_codes_for(day),
+        working_emp_codes=working_today,
     )
 
 
@@ -198,6 +216,9 @@ def exceptions(
     working_prev = (
         roster.working_emp_codes_for(prev_day) if prev_day is not None else None
     )
+    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
+    if leave_by_day is not None:
+        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
     return build_exceptions(
         employees,
         punches,
@@ -226,6 +247,10 @@ def departments_rollup(
         # Phase-1 mode or Odoo not configured → keep returning the placeholder.
         return build_departments_placeholder(day)
     punches = repo.punches_for_day(day)
+    working_today = roster.working_emp_codes_for(day)
+    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
+    if leave_by_day is not None:
+        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
     return build_departments_rollup(
         punches=punches,
         rule=roster.default_shift(),
@@ -233,7 +258,7 @@ def departments_rollup(
         now=now,
         department_by_emp_code=dept_map,
         expected_emp_codes=roster.expected_emp_codes(),
-        working_emp_codes=roster.working_emp_codes_for(day),
+        working_emp_codes=working_today,
     )
 
 

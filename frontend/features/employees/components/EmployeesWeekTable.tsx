@@ -8,6 +8,7 @@ import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
 import { useEmployeesWeek } from "../queries";
 import type { EmployeeWeek } from "../types";
+import { AbsentPill, OnLeavePill } from "./AbsentPill";
 
 // Renders one expandable row per employee with 1+ punches in the week.
 // Each row's collapse state is local React state — keyed by emp_code so
@@ -155,7 +156,13 @@ function EmployeeWeekDaysTable({ days }: { days: EmployeeWeek["days"] }) {
                 {formatTime(d.punch_out)}
               </td>
               <td className="px-[18px] py-[12px] text-text-secondary tabular-nums">
-                {formatWorkedMinutes(d.worked_minutes)}
+                {d.on_leave ? (
+                  <OnLeavePill />
+                ) : d.absent ? (
+                  <AbsentPill />
+                ) : (
+                  formatWorkedMinutes(d.worked_minutes)
+                )}
               </td>
             </tr>
           ))}
