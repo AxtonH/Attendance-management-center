@@ -232,12 +232,16 @@ class TestDailyOnLeave:
         assert by_code["1003"].absent is True
         assert by_code["1003"].on_leave is False
 
-    def test_leave_does_not_affect_present_employees(self):
-        # A punched employee who somehow also has a leave code stays a
-        # normal present row (leave only reclassifies would-be absences).
+    def test_leave_flag_wins_worked_time_even_when_punched(self):
+        # A punched employee who is also on leave (came in briefly on their
+        # day off) keeps their punch times BUT is flagged on_leave so the
+        # worked-time column shows the pill, not a duration.
         result = build_employees_today(
             employees=[_emp("1001")],
-            punches=[_punch("1001", TUE, 9, 0, 1)],
+            punches=[
+                _punch("1001", TUE, 9, 0, 1),
+                _punch("1001", TUE, 9, 30, 2),
+            ],
             day=TUE,
             expected_emp_codes=ROSTER,
             roster_names=NAMES,
@@ -247,9 +251,11 @@ class TestDailyOnLeave:
             on_leave_emp_codes=frozenset({"1001"}),
         )
         alice = next(r for r in result.rows if r.emp_code == "1001")
-        assert alice.on_leave is False
+        assert alice.on_leave is True
         assert alice.absent is False
+        # Punch times stay visible; only the worked-time column reads "On leave".
         assert alice.punch_in is not None
+        assert alice.punch_out is not None
 
 
 class TestWeeklyOnLeave:
@@ -283,6 +289,41 @@ class TestWeeklyOnLeave:
         assert row.days_worked == 1
         assert row.total_worked_minutes == 480
 
+    def test_punched_leave_day_flagged_and_not_counted(self):
+        # Saba case in weekly view: 1001 works a full SUN, then on MON is on
+        # leave but pops in and punches twice (a short visit). MON must read
+        # as on_leave, not count as a worked day, and not add to total mins.
+        punches_by_day = {
+            SUN: [
+                _punch("1001", SUN, 9, 0, 1),
+                _punch("1001", SUN, 17, 0, 2),
+            ],
+            MON: [
+                _punch("1001", MON, 13, 0, 3),
+                _punch("1001", MON, 13, 30, 4),  # 30 min "visit"
+            ],
+            TUE: [],
+        }
+        result = build_employees_week(
+            employees=[_emp("1001")],
+            punches_by_day=punches_by_day,
+            days=DAYS,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "Alice"},
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes_by_day={d: frozenset({"1001"}) for d in DAYS},
+            on_leave_emp_codes_by_day={MON: frozenset({"1001"})},
+        )
+        row = result.rows[0]
+        by_date = {d.date: d for d in row.days}
+        mon = by_date[MON.isoformat()]
+        assert mon.on_leave is True
+        assert mon.punch_in is not None  # punch times still visible
+        # Only SUN counts; MON's leave-day visit must not inflate the total.
+        assert row.days_worked == 1
+        assert row.total_worked_minutes == 480
+
     def test_fully_on_leave_employee_gets_parent_row(self):
         # 1002 never punches but is on leave all three days → parent row
         # with all-on-leave children, zero worked days.
@@ -310,3 +351,118 @@ class TestWeeklyOnLeave:
         # 1003 has no leave → all-absent children.
         cara = by_code["1003"]
         assert all(d.absent and not d.on_leave for d in cara.days)
+
+
+class TestDailyHoliday:
+    def test_holiday_replaces_absent(self):
+        # 1002 didn't punch but it's a company holiday for them → on_holiday,
+        # not absent. 1003 (no holiday) stays absent.
+        result = build_employees_today(
+            employees=[],
+            punches=[],
+            day=TUE,
+            expected_emp_codes=ROSTER,
+            roster_names=NAMES,
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes=ROSTER,
+            on_holiday_emp_codes=frozenset({"1002"}),
+        )
+        by_code = {r.emp_code: r for r in result.rows}
+        assert by_code["1002"].on_holiday is True
+        assert by_code["1002"].absent is False
+        assert by_code["1002"].on_leave is False
+        assert by_code["1003"].absent is True
+
+    def test_holiday_wins_over_leave(self):
+        # 1002 has BOTH a holiday and approved leave today → holiday wins.
+        result = build_employees_today(
+            employees=[],
+            punches=[],
+            day=TUE,
+            expected_emp_codes=ROSTER,
+            roster_names=NAMES,
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes=ROSTER,
+            on_leave_emp_codes=frozenset({"1002"}),
+            on_holiday_emp_codes=frozenset({"1002"}),
+        )
+        bob = next(r for r in result.rows if r.emp_code == "1002")
+        assert bob.on_holiday is True
+        assert bob.on_leave is False
+        assert bob.absent is False
+
+    def test_holiday_flag_wins_worked_time_even_when_punched(self):
+        # A punched employee on a holiday keeps punch times but is flagged
+        # on_holiday so the worked-time column shows the Holiday pill.
+        result = build_employees_today(
+            employees=[_emp("1001")],
+            punches=[
+                _punch("1001", TUE, 9, 0, 1),
+                _punch("1001", TUE, 9, 30, 2),
+            ],
+            day=TUE,
+            expected_emp_codes=ROSTER,
+            roster_names=NAMES,
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes=ROSTER,
+            on_holiday_emp_codes=frozenset({"1001"}),
+        )
+        alice = next(r for r in result.rows if r.emp_code == "1001")
+        assert alice.on_holiday is True
+        assert alice.on_leave is False
+        assert alice.absent is False
+        assert alice.punch_in is not None
+
+
+class TestWeeklyHoliday:
+    def test_holiday_day_is_on_holiday_not_absent_and_not_worked(self):
+        # 1001 works SUN, holiday MON, absent TUE.
+        punches_by_day = {
+            SUN: [
+                _punch("1001", SUN, 9, 0, 1),
+                _punch("1001", SUN, 17, 0, 2),
+            ],
+            MON: [],
+            TUE: [],
+        }
+        result = build_employees_week(
+            employees=[_emp("1001")],
+            punches_by_day=punches_by_day,
+            days=DAYS,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "Alice"},
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes_by_day={d: frozenset({"1001"}) for d in DAYS},
+            on_holiday_emp_codes_by_day={MON: frozenset({"1001"})},
+        )
+        row = result.rows[0]
+        by_date = {d.date: d for d in row.days}
+        assert by_date[MON.isoformat()].on_holiday is True
+        assert by_date[MON.isoformat()].absent is False
+        assert by_date[TUE.isoformat()].absent is True
+        # Only SUN counts as worked; holiday + absent days don't.
+        assert row.days_worked == 1
+        assert row.total_worked_minutes == 480
+
+    def test_holiday_wins_over_leave_in_week(self):
+        # MON is both a holiday and personal leave for 1001 → holiday wins.
+        result = build_employees_week(
+            employees=[_emp("1001")],
+            punches_by_day={SUN: [], MON: [], TUE: []},
+            days=DAYS,
+            expected_emp_codes=frozenset({"1001"}),
+            roster_names={"1001": "Alice"},
+            rule=RULE,
+            now=LATE_NOW,
+            working_emp_codes_by_day={d: frozenset({"1001"}) for d in DAYS},
+            on_leave_emp_codes_by_day={MON: frozenset({"1001"})},
+            on_holiday_emp_codes_by_day={MON: frozenset({"1001"})},
+        )
+        row = result.rows[0]
+        mon = next(d for d in row.days if d.date == MON.isoformat())
+        assert mon.on_holiday is True
+        assert mon.on_leave is False

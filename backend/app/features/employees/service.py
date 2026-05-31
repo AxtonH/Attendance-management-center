@@ -28,6 +28,7 @@ def build_employees_today(
     now: datetime | None = None,
     working_emp_codes: frozenset[str] | None = None,
     on_leave_emp_codes: frozenset[str] | None = None,
+    on_holiday_emp_codes: frozenset[str] | None = None,
 ) -> EmployeesTodayResponse:
     """One row per employee: first and last punch of the day.
 
@@ -46,12 +47,15 @@ def build_employees_today(
     `working_emp_codes` is given) on the schedule for `day`. The weekly
     builder doesn't pass these, so per-day punch grouping is unaffected.
 
-    `on_leave_emp_codes` (when given) is the set of emp_codes with an
-    approved full-day Time Off entry today. Such an employee, if they'd
-    otherwise be absent, is emitted as an on-leave row (`on_leave=True`,
-    `absent=False`) instead — they were excused, not missing.
+    `on_leave_emp_codes` / `on_holiday_emp_codes` (when given) are the sets
+    of emp_codes excused today — by an approved full-day Time Off entry, or
+    by a company-wide public holiday respectively. Such an employee, if
+    they'd otherwise be absent, is emitted as an excused row instead
+    (`on_holiday=True` or `on_leave=True`, with `absent=False`). Holiday
+    wins over leave when both apply.
     """
     on_leave = on_leave_emp_codes or frozenset()
+    on_holiday = on_holiday_emp_codes or frozenset()
     by_code: dict[str, list[datetime]] = {}
     for p in punches:
         if not p.emp_code:
@@ -84,6 +88,13 @@ def build_employees_today(
             if punch_out is not None
             else None
         )
+        # Leave / holiday always wins the worked-time column, even when the
+        # employee punched (e.g. came in briefly on their day off). We keep
+        # the punch times visible but flag the row so the UI shows the
+        # On-leave / Holiday pill instead of a worked-time duration. Holiday
+        # wins over leave when both apply.
+        is_on_holiday = code in on_holiday
+        is_on_leave = (not is_on_holiday) and code in on_leave
         rows.append(
             EmployeeDay(
                 emp_code=code,
@@ -91,6 +102,8 @@ def build_employees_today(
                 punch_in=first,
                 punch_out=punch_out,
                 worked_minutes=worked_minutes,
+                on_leave=is_on_leave,
+                on_holiday=is_on_holiday,
             )
         )
 
@@ -117,9 +130,11 @@ def build_employees_today(
                 # Roster code with no Odoo name → not a real employee,
                 # same drop rule the present-row branch applies.
                 continue
-            # An approved full-day Time Off entry excuses the absence: emit
-            # an on-leave row instead so it reads as planned, not missing.
-            is_on_leave = code in on_leave
+            # A public holiday or approved full-day Time Off excuses the
+            # absence: emit an excused row so it reads as planned, not
+            # missing. Holiday wins over leave when both apply.
+            is_on_holiday = code in on_holiday
+            is_on_leave = (not is_on_holiday) and code in on_leave
             rows.append(
                 EmployeeDay(
                     emp_code=code,
@@ -127,8 +142,9 @@ def build_employees_today(
                     punch_in=None,
                     punch_out=None,
                     worked_minutes=None,
-                    absent=not is_on_leave,
+                    absent=not (is_on_holiday or is_on_leave),
                     on_leave=is_on_leave,
+                    on_holiday=is_on_holiday,
                 )
             )
 
@@ -146,6 +162,7 @@ def build_employees_week(
     now: datetime | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
     on_leave_emp_codes_by_day: Mapping[date, frozenset[str]] | None = None,
+    on_holiday_emp_codes_by_day: Mapping[date, frozenset[str]] | None = None,
 ) -> EmployeesWeekResponse:
     """One parent row per employee with a child row per day in range.
 
@@ -166,12 +183,14 @@ def build_employees_week(
     don't pass them) the old behavior holds: only punched days appear and
     fully-absent employees are omitted.
 
-    `on_leave_emp_codes_by_day` maps each day to the emp_codes on approved
-    full-day Time Off that day; those days surface as `on_leave=True`
-    children (and the person gets a parent row even if fully on leave).
+    `on_leave_emp_codes_by_day` / `on_holiday_emp_codes_by_day` map each day
+    to the emp_codes excused that day (Time Off / public holiday); those
+    days surface as `on_leave=True` / `on_holiday=True` children (and the
+    person gets a parent row even if excused the whole range). Holiday wins
+    over leave on a day where both apply.
 
     `days_worked` and `total_worked_minutes` count worked days only —
-    absent and on-leave child days never contribute.
+    absent, on-leave, and on-holiday child days never contribute.
 
     Per-employee `expected_days` counts in-office workdays for the week:
     days the schedule covers them MINUS WFH days (Prezlab's Thursday).
@@ -210,6 +229,11 @@ def build_employees_week(
                 if absence_enabled and on_leave_emp_codes_by_day is not None
                 else None
             ),
+            on_holiday_emp_codes=(
+                on_holiday_emp_codes_by_day.get(day)
+                if absence_enabled and on_holiday_emp_codes_by_day is not None
+                else None
+            ),
         )
         for row in per_day.rows:
             entry = by_code.setdefault(
@@ -224,14 +248,21 @@ def build_employees_week(
                     worked_minutes=row.worked_minutes,
                     absent=row.absent,
                     on_leave=row.on_leave,
+                    on_holiday=row.on_holiday,
                 )
             )
-            # A worked day is one with a real punch — neither absent nor
-            # on leave. (Absent and on-leave rows both have no punch.)
-            if not row.absent and not row.on_leave:
+            # A worked day is one the employee was genuinely working — not
+            # absent, on leave, or on holiday. A leave/holiday day can still
+            # carry a punch (they popped in briefly), so gate BOTH the
+            # day count and the worked-minutes sum on the same condition;
+            # excused minutes must not inflate the weekly total.
+            is_worked_day = (
+                not row.absent and not row.on_leave and not row.on_holiday
+            )
+            if is_worked_day:
                 entry["days_worked"] += 1
-            if row.worked_minutes is not None:
-                entry["total_minutes"] += row.worked_minutes
+                if row.worked_minutes is not None:
+                    entry["total_minutes"] += row.worked_minutes
 
     # Pre-compute the in-office workday set per emp_code in one pass over
     # the week. O(days × employees) but employees here is just the ones

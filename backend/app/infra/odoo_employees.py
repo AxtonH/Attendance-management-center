@@ -39,6 +39,7 @@ EMP_CODE_FIELD = "x_studio_employee_code"
 NAME_FIELD = "name"
 CALENDAR_FIELD = "resource_calendar_id"
 DEPARTMENT_FIELD = "department_id"
+COMPANY_FIELD = "company_id"
 
 
 def _normalize_emp_code(raw: object) -> str | None:
@@ -81,6 +82,10 @@ class _CacheEntry:
     # reference employees by id (e.g. account.analytic.line.employee_id)
     # back to our canonical emp_code without a second round-trip.
     emp_code_by_odoo_id: Mapping[int, str]
+    # emp_code → Odoo company id (None when unset). Powers public-holiday
+    # matching: a resource.calendar.leaves entry for company X applies to
+    # every employee whose company_id is X.
+    company_ids: Mapping[str, int | None]
     fetched_at: float
 
 
@@ -122,6 +127,10 @@ class OdooEmployeeRepository:
         """Odoo hr.employee id → emp_code, for resolving id references."""
         return self._get_cache().emp_code_by_odoo_id
 
+    def company_ids(self) -> Mapping[str, int | None]:
+        """emp_code → Odoo company id, for public-holiday matching."""
+        return self._get_cache().company_ids
+
     def invalidate(self) -> None:
         with self._lock:
             self._cache = None
@@ -155,13 +164,21 @@ class OdooEmployeeRepository:
         rows = self._client.search_read(
             EMPLOYEE_MODEL,
             domain,
-            ["id", EMP_CODE_FIELD, NAME_FIELD, CALENDAR_FIELD, DEPARTMENT_FIELD],
+            [
+                "id",
+                EMP_CODE_FIELD,
+                NAME_FIELD,
+                CALENDAR_FIELD,
+                DEPARTMENT_FIELD,
+                COMPANY_FIELD,
+            ],
             batch_size=self._batch_size,
         )
         names: dict[str, str] = {}
         calendars: dict[str, int | None] = {}
         departments: dict[str, str] = {}
         emp_code_by_odoo_id: dict[int, str] = {}
+        companies: dict[str, int | None] = {}
         for row in rows:
             code = _normalize_emp_code(row.get(EMP_CODE_FIELD))
             if code is None:
@@ -169,6 +186,7 @@ class OdooEmployeeRepository:
             names[code] = _normalize_name(row.get(NAME_FIELD), code)
             calendars[code] = _many2one_id(row.get(CALENDAR_FIELD))
             departments[code] = _many2one_name(row.get(DEPARTMENT_FIELD))
+            companies[code] = _many2one_id(row.get(COMPANY_FIELD))
             odoo_id = row.get("id")
             if isinstance(odoo_id, int):
                 emp_code_by_odoo_id[odoo_id] = code
@@ -179,6 +197,7 @@ class OdooEmployeeRepository:
             calendar_ids=MappingProxyType(calendars),
             departments=MappingProxyType(departments),
             emp_code_by_odoo_id=MappingProxyType(emp_code_by_odoo_id),
+            company_ids=MappingProxyType(companies),
             fetched_at=time.monotonic(),
         )
 

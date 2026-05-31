@@ -12,7 +12,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_punch_repo, get_roster, now_in_tz, parse_date
-from app.infra.roster import RosterProvider, exclude_on_leave
+from app.infra.roster import RosterProvider, exclude_excused
 from app.infra.supabase_client import PunchRepository
 
 from app.features.dashboard.models import (
@@ -84,11 +84,26 @@ def _build_daily(
     working_prev = (
         roster.working_emp_codes_for(prev_day) if prev_day is not None else None
     )
-    # Drop on-leave people from the in-office universe so the Absent tile /
-    # flags / rollup match the Employees tab's "On leave" treatment.
-    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
-    if leave_by_day is not None:
-        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
+    # Drop on-leave and public-holiday people from the in-office universe so
+    # the Absent tile / flags / rollup match the Employees tab's "On leave"
+    # and "Holiday" treatment. Fetch the excused sets spanning prev_day..day
+    # in one round-trip so the prev-day detectors (missing-punch / incomplete
+    # -hours) can also skip excused people: someone on leave who popped in to
+    # grab something and punched once must NOT be flagged the next day.
+    excused_start = prev_day if prev_day is not None else day
+    leave_by_day = roster.on_leave_emp_codes_for_range(excused_start, day)
+    holiday_by_day = roster.holiday_emp_codes_for_range(excused_start, day)
+
+    def _excuse(working: frozenset[str] | None, d: date) -> frozenset[str] | None:
+        return exclude_excused(
+            working,
+            leave_by_day.get(d) if leave_by_day is not None else None,
+            holiday_by_day.get(d) if holiday_by_day is not None else None,
+        )
+
+    working_today = _excuse(working_today, day)
+    if prev_day is not None:
+        working_prev = _excuse(working_prev, prev_day)
     return build_dashboard(
         employees=employees,
         punches=punches,
@@ -146,13 +161,19 @@ def _build_range(
 
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
 
-    # Drop on-leave people per day from the in-office universe so weekly /
-    # monthly / custom Absent counts and flags exclude approved leave,
-    # consistent with the daily view and the Employees tab.
+    # Drop on-leave and public-holiday people per day from the in-office
+    # universe so weekly / monthly / custom Absent counts and flags exclude
+    # both, consistent with the daily view and the Employees tab.
     leave_by_day = roster.on_leave_emp_codes_for_range(start, range_end)
-    if leave_by_day is not None:
+    holiday_by_day = roster.holiday_emp_codes_for_range(start, range_end)
+    if leave_by_day is not None or holiday_by_day is not None:
         working_by_day = {
-            d: exclude_on_leave(working_by_day[d], leave_by_day.get(d)) for d in days
+            d: exclude_excused(
+                working_by_day[d],
+                leave_by_day.get(d) if leave_by_day is not None else None,
+                holiday_by_day.get(d) if holiday_by_day is not None else None,
+            )
+            for d in days
         }
 
     # Chip strategy mirrors the visible range size: a week's worth of
@@ -188,8 +209,12 @@ def overview(
     employees = roster.employees_from_punches(punches)
     working_today = roster.working_emp_codes_for(day)
     leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
-    if leave_by_day is not None:
-        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
+    holiday_by_day = roster.holiday_emp_codes_for_range(day, day)
+    working_today = exclude_excused(
+        working_today,
+        leave_by_day.get(day) if leave_by_day is not None else None,
+        holiday_by_day.get(day) if holiday_by_day is not None else None,
+    )
     return build_overview(
         employees,
         punches,
@@ -216,9 +241,22 @@ def exceptions(
     working_prev = (
         roster.working_emp_codes_for(prev_day) if prev_day is not None else None
     )
-    leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
-    if leave_by_day is not None:
-        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
+    # Span prev_day..day so the prev-day detectors also skip excused people
+    # (someone on leave/holiday who punched once mustn't be flagged).
+    excused_start = prev_day if prev_day is not None else day
+    leave_by_day = roster.on_leave_emp_codes_for_range(excused_start, day)
+    holiday_by_day = roster.holiday_emp_codes_for_range(excused_start, day)
+
+    def _excuse(working: frozenset[str] | None, d: date) -> frozenset[str] | None:
+        return exclude_excused(
+            working,
+            leave_by_day.get(d) if leave_by_day is not None else None,
+            holiday_by_day.get(d) if holiday_by_day is not None else None,
+        )
+
+    working_today = _excuse(working_today, day)
+    if prev_day is not None:
+        working_prev = _excuse(working_prev, prev_day)
     return build_exceptions(
         employees,
         punches,
@@ -249,8 +287,12 @@ def departments_rollup(
     punches = repo.punches_for_day(day)
     working_today = roster.working_emp_codes_for(day)
     leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
-    if leave_by_day is not None:
-        working_today = exclude_on_leave(working_today, leave_by_day.get(day))
+    holiday_by_day = roster.holiday_emp_codes_for_range(day, day)
+    working_today = exclude_excused(
+        working_today,
+        leave_by_day.get(day) if leave_by_day is not None else None,
+        holiday_by_day.get(day) if holiday_by_day is not None else None,
+    )
     return build_departments_rollup(
         punches=punches,
         rule=roster.default_shift(),

@@ -22,28 +22,34 @@ import yaml
 from app.infra.calendar_parser import PREZLAB_DEFAULT_DAYS
 from app.infra.odoo_calendars import OdooCalendarRepository
 from app.infra.odoo_employees import OdooEmployeeRepository
+from app.infra.odoo_holidays import OdooHolidayRepository
 from app.infra.odoo_timesheets import OdooTimesheetRepository
 from app.shared.models import Department, Employee, Punch, ShiftRule
 
 
-def exclude_on_leave(
+def exclude_excused(
     working: frozenset[str] | None,
-    on_leave: frozenset[str] | None,
+    *excused: frozenset[str] | None,
 ) -> frozenset[str] | None:
-    """Remove on-leave emp_codes from a day's working (in-office) set.
+    """Remove excused emp_codes (on-leave, public holiday) from a day's
+    working (in-office) set.
 
-    People on approved full-day leave aren't expected in the office that
-    day, so they drop out of the universe the dashboard uses for Present /
-    Absent math and the department rollup — keeping the dashboard tab
-    consistent with the Employees tab's "On leave" treatment.
+    People excused from the office that day — approved full-day leave or a
+    company-wide public holiday — drop out of the universe the dashboard
+    uses for Present / Absent math and the department rollup, keeping the
+    dashboard tab consistent with the Employees tab's "On leave" / "Holiday"
+    treatment.
 
     `working is None` is the phase-1 "no schedule info" sentinel; it's
-    preserved as-is (we never fabricate a working set from leave data
-    alone). `on_leave` None/empty is a no-op. Pure; no I/O.
+    preserved as-is (we never fabricate a working set from excused data
+    alone). Each excused set may be None/empty (a no-op). Pure; no I/O.
     """
-    if working is None or not on_leave:
+    if working is None:
         return working
-    return working - on_leave
+    for codes in excused:
+        if codes:
+            working = working - codes
+    return working
 
 
 class RosterProvider(Protocol):
@@ -55,6 +61,9 @@ class RosterProvider(Protocol):
     def working_emp_codes_for(self, day: date) -> frozenset[str] | None: ...
     def department_by_emp_code(self) -> Mapping[str, str]: ...
     def on_leave_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None: ...
+    def holiday_emp_codes_for_range(
         self, start: date, end: date
     ) -> Mapping[date, frozenset[str]] | None: ...
 
@@ -127,6 +136,12 @@ class PunchDerivedRosterProvider:
         # don't reclassify any absence as on-leave".
         return None
 
+    def holiday_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None:
+        # Phase 1: no Odoo holiday data. None signals "no holiday info".
+        return None
+
 
 class OdooRosterProvider:
     """Phase 2 implementation: roster comes from Odoo.
@@ -146,10 +161,12 @@ class OdooRosterProvider:
         odoo_calendars: OdooCalendarRepository,
         fallback: PunchDerivedRosterProvider,
         odoo_timesheets: OdooTimesheetRepository | None = None,
+        odoo_holidays: OdooHolidayRepository | None = None,
     ) -> None:
         self._odoo_employees = odoo_employees
         self._odoo_calendars = odoo_calendars
         self._odoo_timesheets = odoo_timesheets
+        self._odoo_holidays = odoo_holidays
         self._fallback = fallback
 
     def employees_from_punches(self, punches: list[Punch]) -> list[Employee]:
@@ -212,3 +229,36 @@ class OdooRosterProvider:
         return self._odoo_timesheets.on_leave_emp_codes_for_range(
             start, end, self._odoo_employees.emp_code_by_odoo_id()
         )
+
+    def holiday_emp_codes_for_range(
+        self, start: date, end: date
+    ) -> Mapping[date, frozenset[str]] | None:
+        """Public-holiday emp_codes per day in [start, end].
+
+        Composes the holiday repo (company-wide closures by company id) with
+        the employee repo's emp_code → company_id map (already cached): a
+        holiday for company X marks every roster employee in company X for
+        that day. Returns None when no holiday repo is wired.
+        """
+        if self._odoo_holidays is None:
+            return None
+        company_holidays = self._odoo_holidays.holiday_company_ids_for_range(
+            start, end
+        )
+        if not company_holidays:
+            return {}
+        # Invert the cached emp_code → company map once: company_id →
+        # [emp_code]. Tiny (roster size), rebuilt per call to stay correct
+        # if the cache refreshed between requests.
+        codes_by_company: dict[int, list[str]] = {}
+        for code, company_id in self._odoo_employees.company_ids().items():
+            if company_id is not None:
+                codes_by_company.setdefault(company_id, []).append(code)
+        out: dict[date, frozenset[str]] = {}
+        for day, company_ids in company_holidays.items():
+            codes: set[str] = set()
+            for cid in company_ids:
+                codes.update(codes_by_company.get(cid, ()))
+            if codes:
+                out[day] = frozenset(codes)
+        return out

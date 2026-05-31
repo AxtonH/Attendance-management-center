@@ -38,6 +38,8 @@ def employees_today(
     employees = roster.employees_from_punches(punches)
     leave_by_day = roster.on_leave_emp_codes_for_range(day, day)
     on_leave = leave_by_day.get(day) if leave_by_day is not None else None
+    holiday_by_day = roster.holiday_emp_codes_for_range(day, day)
+    on_holiday = holiday_by_day.get(day) if holiday_by_day is not None else None
     return build_employees_today(
         employees=employees,
         punches=punches,
@@ -48,6 +50,7 @@ def employees_today(
         now=now,
         working_emp_codes=roster.working_emp_codes_for(day),
         on_leave_emp_codes=on_leave,
+        on_holiday_emp_codes=on_holiday,
     )
 
 
@@ -73,6 +76,7 @@ def employees_week(
     employees = roster.employees_from_punches(all_punches)
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
     leave_by_day = roster.on_leave_emp_codes_for_range(start, end)
+    holiday_by_day = roster.holiday_emp_codes_for_range(start, end)
     return build_employees_week(
         employees=employees,
         punches_by_day=punches_by_day,
@@ -83,6 +87,7 @@ def employees_week(
         now=now,
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
+        on_holiday_emp_codes_by_day=holiday_by_day,
     )
 
 
@@ -110,6 +115,7 @@ def employees_month(
     employees = roster.employees_from_punches(all_punches)
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
     leave_by_day = roster.on_leave_emp_codes_for_range(start, end)
+    holiday_by_day = roster.holiday_emp_codes_for_range(start, end)
     # Reuse the weekly service — same row shape — then re-wrap as a
     # monthly response so the API stays self-documenting.
     week_result = build_employees_week(
@@ -122,6 +128,7 @@ def employees_month(
         now=now,
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
+        on_holiday_emp_codes_by_day=holiday_by_day,
     )
     return EmployeesMonthResponse(
         range_start=week_result.range_start,
@@ -166,6 +173,7 @@ def employees_range(
     employees = roster.employees_from_punches(all_punches)
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
     leave_by_day = roster.on_leave_emp_codes_for_range(start, end)
+    holiday_by_day = roster.holiday_emp_codes_for_range(start, end)
     result = build_employees_week(
         employees=employees,
         punches_by_day=punches_by_day,
@@ -176,6 +184,7 @@ def employees_range(
         now=now,
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
+        on_holiday_emp_codes_by_day=holiday_by_day,
     )
     return EmployeesMonthResponse(
         range_start=result.range_start,

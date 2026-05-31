@@ -15,17 +15,22 @@ class EmployeeDay(BaseModel):
     On-leave rows are absences excused by an approved full-day Time Off
     timesheet entry: `on_leave=True`, `absent=False`. The frontend shows a
     pale-blue "On leave" pill instead of the red Absent one.
+
+    On-holiday rows are absences excused by a company-wide public holiday:
+    `on_holiday=True`, `absent=False`. Holiday wins over leave when both
+    apply. The frontend shows a distinct "Holiday" pill.
     """
 
     emp_code: str
     name: str
-    punch_in: datetime | None = None  # None when absent / on leave
+    punch_in: datetime | None = None  # None when absent / on leave / holiday
     punch_out: datetime | None = None  # None if employee only punched once
     # punch_out - punch_in in whole minutes. None when punch_out is None
     # (single-punch day → no defensible duration to show).
     worked_minutes: int | None = None
     absent: bool = False
     on_leave: bool = False
+    on_holiday: bool = False
 
 
 class EmployeesTodayResponse(BaseModel):
@@ -39,15 +44,18 @@ class EmployeeWeekDay(BaseModel):
     Absent days (scheduled in-office days the employee missed) carry
     `absent=True` with null punch fields — same treatment as the daily
     view's absent rows. Days excused by an approved full-day Time Off
-    entry carry `on_leave=True` (and `absent=False`) instead.
+    entry carry `on_leave=True` (and `absent=False`); days falling on a
+    company-wide public holiday carry `on_holiday=True` (and `absent=False`,
+    winning over leave when both apply).
     """
 
     date: str  # ISO date — child rows render this themselves
-    punch_in: datetime | None = None  # None when absent / on leave
+    punch_in: datetime | None = None  # None when absent / on leave / holiday
     punch_out: datetime | None = None
     worked_minutes: int | None = None
     absent: bool = False
     on_leave: bool = False
+    on_holiday: bool = False
 
 
 class EmployeeWeek(BaseModel):

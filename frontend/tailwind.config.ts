@@ -39,6 +39,9 @@ const config: Config = {
         // Pale light blue — the "On leave" pill counterpart to danger's
         // red Absent pill. Excused absence reads calm, not alarming.
         leave: { bg: "#DBEAFE", text: "#1E40AF" },
+        // Soft green — the "Holiday" pill. Distinct from leave's blue so a
+        // company-wide closure reads differently from individual time off.
+        holiday: { bg: "#D1FAE5", text: "#065F46" },
         severity: {
           high: "#B91C1C",
           med: "#B45309",

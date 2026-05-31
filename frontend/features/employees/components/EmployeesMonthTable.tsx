@@ -13,7 +13,7 @@ import { useTypeAheadFilter } from "@/lib/hooks/useTypeAheadFilter";
 
 import { useEmployeesMonth, useEmployeesRange } from "../queries";
 import type { EmployeeWeek, EmployeeWeekDay, EmployeesMonth } from "../types";
-import { AbsentPill, OnLeavePill } from "./AbsentPill";
+import { AbsentPill, HolidayPill, OnLeavePill } from "./AbsentPill";
 
 // Monthly variant of EmployeesWeekTable. The per-employee row shape is
 // identical (we reuse the EmployeeWeek type), but the child table groups
@@ -231,7 +231,9 @@ function WeekSection({
             {formatTime(d.punch_out)}
           </td>
           <td className="px-[18px] py-[12px] text-text-secondary tabular-nums">
-            {d.on_leave ? (
+            {d.on_holiday ? (
+              <HolidayPill />
+            ) : d.on_leave ? (
               <OnLeavePill />
             ) : d.absent ? (
               <AbsentPill />

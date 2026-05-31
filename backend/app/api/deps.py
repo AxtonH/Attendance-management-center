@@ -15,6 +15,7 @@ from app.config import Settings, get_settings
 from app.infra.odoo_calendars import OdooCalendarRepository
 from app.infra.odoo_client import OdooClient
 from app.infra.odoo_employees import OdooEmployeeRepository
+from app.infra.odoo_holidays import OdooHolidayRepository
 from app.infra.odoo_timesheets import OdooTimesheetRepository
 from app.infra.roster import (
     OdooRosterProvider,
@@ -38,6 +39,7 @@ def _odoo_roster_singleton(
     password: str,
     cache_ttl: int,
     batch_size: int,
+    app_timezone: str,
 ) -> OdooRosterProvider:
     # Singletons keyed by the full connection tuple so test overrides that
     # change credentials produce a fresh client instead of reusing a stale one.
@@ -49,12 +51,18 @@ def _odoo_roster_singleton(
         client, cache_ttl_seconds=cache_ttl, batch_size=batch_size
     )
     timesheets = OdooTimesheetRepository(client, batch_size=batch_size)
+    # Holidays come back as UTC datetimes; the repo converts them to the
+    # app timezone to derive the correct local calendar day.
+    holidays = OdooHolidayRepository(
+        client, batch_size=batch_size, tz=ZoneInfo(app_timezone)
+    )
     fallback = _punch_derived_roster_singleton(config_dir)
     return OdooRosterProvider(
         odoo_employees=employees,
         odoo_calendars=calendars,
         fallback=fallback,
         odoo_timesheets=timesheets,
+        odoo_holidays=holidays,
     )
 
 
@@ -69,6 +77,7 @@ def get_roster(settings: Settings = Depends(get_settings)) -> RosterProvider:
             settings.odoo_password,
             settings.odoo_employee_cache_ttl,
             settings.odoo_batch_size,
+            settings.app_timezone,
         )
     return _punch_derived_roster_singleton(config_dir)
 
