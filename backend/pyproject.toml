@@ -11,6 +11,10 @@ dependencies = [
     "supabase>=2.10.0",
     "pyyaml>=6.0.2",
     "python-dateutil>=2.9.0",
+    # Report exports. openpyxl writes .xlsx; reportlab writes .pdf. Both are
+    # pure-Python (no system libs) so the Railway/Docker build stays simple.
+    "openpyxl>=3.1.5",
+    "reportlab>=4.2.0",
     # IANA timezone database. Required on Windows (no system tzdata) and
     # harmless on Linux/macOS where it's overridden by the OS database.
     "tzdata>=2024.2",

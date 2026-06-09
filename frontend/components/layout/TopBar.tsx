@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
+import { ReportsMenu } from "./ReportsMenu";
+
 const NAV = [
   { label: "Dashboard", href: "/" },
   { label: "Employees", href: "/employees" },
@@ -31,6 +33,11 @@ export function TopBar() {
           const className = active
             ? "cursor-pointer text-text-on-dark"
             : "cursor-pointer";
+          // Reports is a live dropdown (Excel / PDF export of the viewed
+          // period), not a route — render the menu in its nav slot.
+          if (item.label === "Reports") {
+            return <ReportsMenu key={item.label} />;
+          }
           return item.href.startsWith("#") ? (
             <span key={item.label} className={className}>
               {item.label}
