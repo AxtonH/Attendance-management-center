@@ -32,7 +32,7 @@ Each becomes one Railway service. Both build from this single GitHub repo.
    | `ODOO_URL` | e.g. `https://your-org.odoo.com` |
    | `ODOO_DB` | Your Odoo database name |
    | `ODOO_USERNAME` | The integration user's email/username |
-   | `ODOO_PASSWORD` | The integration user's password or API key |
+   | `ODOO_API_KEY` | An Odoo API key for the integration user (Preferences → Account Security → New API Key). Passwords don't work with 2FA enforced. |
    | `APP_TIMEZONE` | `Asia/Amman` (or other IANA tz) |
    | `APP_LOG_LEVEL` | `INFO` |
    | `CORS_ALLOW_ORIGINS` | **Leave for now; you'll set this after the frontend deploys.** |

@@ -42,13 +42,17 @@ class Settings(BaseSettings):
     odoo_url: str = Field(default="", alias="ODOO_URL")
     odoo_db: str = Field(default="", alias="ODOO_DB")
     odoo_username: str = Field(default="", alias="ODOO_USERNAME")
-    odoo_password: str = Field(default="", alias="ODOO_PASSWORD")
+    # Odoo API key (Preferences → Account Security → New API Key). With 2FA
+    # enforced on Odoo accounts, password auth no longer works over RPC;
+    # API keys are Odoo's mechanism for programmatic access and are used
+    # in place of the password.
+    odoo_api_key: str = Field(default="", alias="ODOO_API_KEY")
     odoo_employee_cache_ttl: int = Field(default=300, alias="ODOO_EMPLOYEE_CACHE_TTL")
     odoo_batch_size: int = Field(default=500, alias="ODOO_BATCH_SIZE")
 
     @property
     def odoo_configured(self) -> bool:
-        return bool(self.odoo_url and self.odoo_db and self.odoo_username and self.odoo_password)
+        return bool(self.odoo_url and self.odoo_db and self.odoo_username and self.odoo_api_key)
 
     @property
     def resolved_config_dir(self) -> Path:

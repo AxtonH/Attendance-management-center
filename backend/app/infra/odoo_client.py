@@ -37,14 +37,14 @@ class OdooClient:
         url: str,
         db: str,
         username: str,
-        password: str,
+        api_key: str,
         *,
         timeout: float = 30.0,
     ) -> None:
         self._url = url.rstrip("/")
         self._db = db
         self._username = username
-        self._password = password
+        self._api_key = api_key
         self._timeout = timeout
         self._uid: int | None = None
         self._uid_lock = threading.Lock()
@@ -63,10 +63,10 @@ class OdooClient:
         with self._uid_lock:
             if self._uid is not None:
                 return self._uid
-            uid = self._common.authenticate(self._db, self._username, self._password, {})
+            uid = self._common.authenticate(self._db, self._username, self._api_key, {})
             if not uid:
                 raise OdooAuthError(
-                    "Odoo authenticate() returned no uid — check ODOO_DB / ODOO_USERNAME / ODOO_PASSWORD."
+                    "Odoo authenticate() returned no uid — check ODOO_DB / ODOO_USERNAME / ODOO_API_KEY."
                 )
             self._uid = int(uid)
             logger.info("Odoo authenticated as uid=%s on db=%s", self._uid, self._db)
@@ -81,7 +81,7 @@ class OdooClient:
     ) -> Any:
         uid = self._ensure_uid()
         return self._models.execute_kw(
-            self._db, uid, self._password, model, method, args, kwargs or {}
+            self._db, uid, self._api_key, model, method, args, kwargs or {}
         )
 
     def search_read(

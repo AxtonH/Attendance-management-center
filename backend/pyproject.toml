@@ -13,8 +13,11 @@ dependencies = [
     "python-dateutil>=2.9.0",
     # Report exports. openpyxl writes .xlsx; reportlab writes .pdf. Both are
     # pure-Python (no system libs) so the Railway/Docker build stays simple.
+    # Pillow draws the arrival-pattern chart PNG embedded in both formats
+    # (binary wheels for every platform we deploy on — no system libs).
     "openpyxl>=3.1.5",
     "reportlab>=4.2.0",
+    "pillow>=10.1.0",
     # IANA timezone database. Required on Windows (no system tzdata) and
     # harmless on Linux/macOS where it's overridden by the OS database.
     "tzdata>=2024.2",

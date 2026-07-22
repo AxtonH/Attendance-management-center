@@ -36,14 +36,14 @@ def _odoo_roster_singleton(
     url: str,
     db: str,
     username: str,
-    password: str,
+    api_key: str,
     cache_ttl: int,
     batch_size: int,
     app_timezone: str,
 ) -> OdooRosterProvider:
     # Singletons keyed by the full connection tuple so test overrides that
     # change credentials produce a fresh client instead of reusing a stale one.
-    client = OdooClient(url=url, db=db, username=username, password=password)
+    client = OdooClient(url=url, db=db, username=username, api_key=api_key)
     employees = OdooEmployeeRepository(
         client, cache_ttl_seconds=cache_ttl, batch_size=batch_size
     )
@@ -74,7 +74,7 @@ def get_roster(settings: Settings = Depends(get_settings)) -> RosterProvider:
             settings.odoo_url,
             settings.odoo_db,
             settings.odoo_username,
-            settings.odoo_password,
+            settings.odoo_api_key,
             settings.odoo_employee_cache_ttl,
             settings.odoo_batch_size,
             settings.app_timezone,
