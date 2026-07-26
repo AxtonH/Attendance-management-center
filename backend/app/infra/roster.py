@@ -60,6 +60,7 @@ class RosterProvider(Protocol):
     def display_names(self) -> Mapping[str, str]: ...
     def working_emp_codes_for(self, day: date) -> frozenset[str] | None: ...
     def department_by_emp_code(self) -> Mapping[str, str]: ...
+    def pod_by_emp_code(self) -> Mapping[str, str]: ...
     def on_leave_emp_codes_for_range(
         self, start: date, end: date
     ) -> Mapping[date, frozenset[str]] | None: ...
@@ -129,6 +130,10 @@ class PunchDerivedRosterProvider:
         # will skip the section (or render an empty list, per its choice).
         return {}
 
+    def pod_by_emp_code(self) -> Mapping[str, str]:
+        # Phase 1: no Odoo pod data. Exports render "—" for the missing ones.
+        return {}
+
     def on_leave_emp_codes_for_range(
         self, start: date, end: date
     ) -> Mapping[date, frozenset[str]] | None:
@@ -189,6 +194,10 @@ class OdooRosterProvider:
     def department_by_emp_code(self) -> Mapping[str, str]:
         # Same cached payload that powers expected_emp_codes — no round-trip.
         return self._odoo_employees.departments()
+
+    def pod_by_emp_code(self) -> Mapping[str, str]:
+        # Same cached payload — no round-trip.
+        return self._odoo_employees.pods()
 
     def working_emp_codes_for(self, day: date) -> frozenset[str]:
         """Employees whose schedule covers `day` (Mon=0..Sun=6).

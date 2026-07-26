@@ -102,6 +102,7 @@ def export_employees(
         period_label=_period_label(s, e, single_day),
         generated_on=now.date(),
         department_by_emp_code=roster.department_by_emp_code(),
+        pod_by_emp_code=roster.pod_by_emp_code(),
         working_emp_codes_by_day=working_by_day,
         emp_codes=selection,
     )

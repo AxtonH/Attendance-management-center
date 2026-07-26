@@ -40,6 +40,9 @@ NAME_FIELD = "name"
 CALENDAR_FIELD = "resource_calendar_id"
 DEPARTMENT_FIELD = "department_id"
 COMPANY_FIELD = "company_id"
+# Odoo Studio field labelled "Pod" — the team an employee belongs to within
+# their department. Surfaced as "Pool / Team" on the export's profile block.
+POD_FIELD = "x_studio_pod"
 
 
 def _normalize_emp_code(raw: object) -> str | None:
@@ -78,6 +81,8 @@ class _CacheEntry:
     # emp_code → department display name. "" when the employee has no
     # department set (shown as "Unassigned" in the rollup).
     departments: Mapping[str, str]
+    # emp_code → pod/team display name, "" when unset.
+    pods: Mapping[str, str]
     # Odoo hr.employee id → emp_code. Lets callers resolve records that
     # reference employees by id (e.g. account.analytic.line.employee_id)
     # back to our canonical emp_code without a second round-trip.
@@ -122,6 +127,10 @@ class OdooEmployeeRepository:
 
     def departments(self) -> Mapping[str, str]:
         return self._get_cache().departments
+
+    def pods(self) -> Mapping[str, str]:
+        """emp_code → pod/team name, for the export's profile block."""
+        return self._get_cache().pods
 
     def emp_code_by_odoo_id(self) -> Mapping[int, str]:
         """Odoo hr.employee id → emp_code, for resolving id references."""
@@ -171,12 +180,14 @@ class OdooEmployeeRepository:
                 CALENDAR_FIELD,
                 DEPARTMENT_FIELD,
                 COMPANY_FIELD,
+                POD_FIELD,
             ],
             batch_size=self._batch_size,
         )
         names: dict[str, str] = {}
         calendars: dict[str, int | None] = {}
         departments: dict[str, str] = {}
+        pods: dict[str, str] = {}
         emp_code_by_odoo_id: dict[int, str] = {}
         companies: dict[str, int | None] = {}
         for row in rows:
@@ -186,6 +197,7 @@ class OdooEmployeeRepository:
             names[code] = _normalize_name(row.get(NAME_FIELD), code)
             calendars[code] = _many2one_id(row.get(CALENDAR_FIELD))
             departments[code] = _many2one_name(row.get(DEPARTMENT_FIELD))
+            pods[code] = _tag_name(row.get(POD_FIELD))
             companies[code] = _many2one_id(row.get(COMPANY_FIELD))
             odoo_id = row.get("id")
             if isinstance(odoo_id, int):
@@ -196,6 +208,7 @@ class OdooEmployeeRepository:
             codes=frozenset(names.keys()),
             calendar_ids=MappingProxyType(calendars),
             departments=MappingProxyType(departments),
+            pods=MappingProxyType(pods),
             emp_code_by_odoo_id=MappingProxyType(emp_code_by_odoo_id),
             company_ids=MappingProxyType(companies),
             fetched_at=time.monotonic(),
@@ -211,3 +224,21 @@ def _many2one_name(value: object) -> str:
     if isinstance(value, list) and len(value) >= 2:
         return str(value[1] or "").strip()
     return ""
+
+
+def _tag_name(value: object) -> str:
+    """Display name for a Studio tag field, "" when unset.
+
+    Studio tag fields aren't one consistent shape over XML-RPC: depending on
+    how the field was defined it arrives as a many2one `[id, "Name"]`, a
+    many2many id list (no names in the payload), or a plain selection/char
+    string. Read the ones that carry a name and fall back to "" for the
+    id-list form rather than rendering a bare id.
+    """
+    if isinstance(value, list):
+        if len(value) >= 2 and isinstance(value[1], str):
+            return value[1].strip()
+        return ""
+    if value is False or value is None:
+        return ""
+    return str(value).strip()

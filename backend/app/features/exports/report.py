@@ -13,17 +13,20 @@ consume `AttendanceReport` — format-specific code never touches attendance
 logic, and column/label changes happen in exactly one place.
 
 Built from the same `EmployeesWeekResponse` the Employees pages render, so
-screen and file always agree. Fields the reference tracks but we don't yet
-(position, pool, line manager, per-employee shift, missing *sign-ins*) are
-intentionally absent — see the NOTE at the bottom of this docstring.
+screen and file always agree.
 
-NOTE — reference fields not yet tracked by this system:
-  - Position / Pool / Line manager: not in the Odoo payload we mirror.
+NOTE — template fields not yet tracked by this system:
+  - Position / Line manager: not in the Odoo payload we mirror.
   - Days WFH per employee: phase-1 uses the org-wide `wfh_weekdays` rule.
   - Missing sign-ins: punches are collapsed to first/last per day, so a
-    missing *first* punch is indistinguishable from a normal arrival.
+    missing *first* punch is indistinguishable from a normal arrival. The
+    "Missing sign-in/out" figures therefore count missing sign-*outs* only.
 When those land (phase 3 Odoo work), extend `EmployeeSection` here and both
 renderers pick them up automatically.
+
+Shift end has no dedicated config field; it's derived as
+`start + full_day_minutes` (09:00 + 8h = 17:00 with the org default), which
+drives the departure buckets and the on-time-departure metrics.
 
 No I/O. No datetime.now(). Everything needed comes in as arguments.
 """
@@ -47,23 +50,31 @@ STATUS_ABSENT = "Absent"
 STATUS_ON_LEAVE = "On leave"
 STATUS_HOLIDAY = "Holiday"
 STATUS_WFH = "WFH"
-STATUS_DAY_OFF = "Day off"
+# A day the employee's own schedule doesn't cover. Not a fixed Fri/Sat: shift
+# patterns differ, so someone working Fri–Sat has their weekend on Sun–Mon.
+# Distinct from `STATUS_ON_LEAVE`, which is a day they *were* scheduled to
+# work and took off.
+STATUS_WEEKEND = "Weekend"
+STATUS_DAY_OFF = "Day off"  # unscheduled, but no schedule data to confirm
 STATUS_UPCOMING = "—"  # day hasn't happened yet (or today, pre-cutoff)
 
-_DASH = "—"
+# Placeholder for "no value" across both renderers.
+DASH = "—"
+_DASH = DASH  # internal alias; keeps the existing call sites terse
 
 
 @dataclass(frozen=True)
 class DayLine:
     """One calendar day on an employee's sheet/page."""
 
-    date: str  # "01-06-2026" (DD-MM-YYYY per convention)
+    date: str  # "01/06/2026" (DD/MM/YYYY per org convention)
     weekday: str  # "Mon"
     status: str  # one of the STATUS_* constants
     check_in: str  # "09:05" or "—"
     check_out: str  # "17:30" or "—"
     worked: str  # "8h 25m" or "—"
     late_by: str  # "23m" when late, else ""
+    missing_hours: str  # shortfall against the full day, "0h 14m" or "—"
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,10 @@ class EmployeeSection:
     emp_code: str
     name: str
     department: str
+    pod: str  # Odoo `x_studio_pod`; "" when unset
+    schedule_label: str  # "Sun – Thu" or "—" without schedule data
+    shift_start: str  # "09:00"
+    shift_end: str  # "17:00" — derived from start + full_day_minutes
     days_expected: int
     days_attended: int  # includes late days
     days_late: int
@@ -85,9 +100,19 @@ class EmployeeSection:
     days_on_leave: int
     days_holiday: int
     missing_signouts: int  # attended days with a first punch but no last
+    days_on_time: int  # attended days arriving within grace
+    departures_on_time: int  # sign-outs at/after shift end
+    departures_recorded: int  # attended days with a sign-out at all
+    # Shortfall against `full_day_minutes` summed over attended days, floored
+    # at zero per day (overtime on one day never offsets a short day).
+    missing_minutes: int
+    days_wfh: int
     avg_arrival: str  # "09:12" or "—"
+    avg_departure: str  # "17:04" or "—"
     total_worked: str  # "142h 20m"
+    expected_worked: str  # full-day × expected days, "32h 00m"
     avg_worked: str  # per attended day, "7h 06m" or "—"
+    full_day: str  # the daily target itself, "8h 00m"
     attendance_pct: str  # "90%" or "—"
     days: list[DayLine]
 
@@ -110,17 +135,50 @@ class HistogramBin:
 
 
 @dataclass(frozen=True)
+class RankingEntry:
+    """One row of a Top Rankings column: employee + their formatted value."""
+
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Ranking:
+    """One Top Rankings column — a title and its podium (up to 3 entries)."""
+
+    title: str
+    entries: list[RankingEntry]
+
+
+@dataclass(frozen=True)
+class KeyMetric:
+    """One of the four headline tiles at the top of the summary sheet."""
+
+    label: str
+    value: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class AttendanceReport:
     """The whole report: summary + one section per employee."""
 
     title: str
+    subtitle: str
     period_label: str
-    generated_label: str
+    generated_label: str  # "Generated 19-07-2026" — PDF/page caption
+    generated_on: str  # "19/07/2026" — bare date for the summary meta block
+    employee_count: int
+    # The four hero tiles across the top of the summary sheet.
+    key_metrics: list[KeyMetric]
     stats: list[ReportStat]
-    # Arrival-pattern histogram over every first sign-in on attended days,
-    # 30-minute buckets — the export counterpart of the dashboard's arrival
-    # chart. Empty when the period has no arrivals.
-    arrival_histogram: list[HistogramBin]
+    # Fixed-window arrival/departure distributions for both renderers'
+    # side-by-side pattern tables and charts (see `_ARRIVAL_OFFSETS` /
+    # `_DEPARTURE_OFFSETS`). Always the full window list; counts are zero
+    # when the period has no samples.
+    arrival_buckets: list[HistogramBin]
+    departure_buckets: list[HistogramBin]
+    rankings: list[Ranking]
     overview_columns: list[str]
     overview_rows: list[list[str]]  # aligned to overview_columns; one per section
     sections: list[EmployeeSection]
@@ -176,6 +234,91 @@ def _minutes_of_day(value: datetime) -> int:
     return value.hour * 60 + value.minute
 
 
+def _parse_hhmm(value: str) -> int:
+    """'09:00' → 540 minutes-of-day."""
+    hours, _, minutes = value.partition(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _shift_start_minutes(rule: ShiftRule) -> int:
+    return _parse_hhmm(rule.start)
+
+
+def _shift_end_minutes(rule: ShiftRule) -> int:
+    """Shift end derived from the configured start + expected day length.
+
+    There is no explicit `end` in the shift rules (phase 1 tracks arrival,
+    not departure), so the workday's nominal close is start + full-day. With
+    the org default that's 09:00 + 8h = 17:00, and it follows the config if
+    either value changes.
+    """
+    return _shift_start_minutes(rule) + rule.full_day_minutes
+
+
+def _fmt_hhmm(minutes: int) -> str:
+    h, m = divmod(minutes % (24 * 60), 60)
+    return f"{h:02d}:{m:02d}"
+
+
+# Fixed-window distributions for the summary sheet. Both are expressed as
+# offsets in minutes relative to the shift boundary, so they track the
+# configured shift instead of hardcoding 09:00/17:00. Each entry is
+# (label-builder, lower-offset, upper-offset); the first bucket is
+# open-ended below and the last open-ended above.
+_ARRIVAL_OFFSETS: list[tuple[int | None, int | None]] = [
+    (-30, 0),  # 08:30–09:00
+    (0, 15),  # 09:00–09:15
+    (15, 30),  # 09:15–09:30
+    (30, 45),  # 09:30–09:45
+    (45, 60),  # 09:45–10:00
+    (60, 90),  # 10:00–10:30
+    (90, None),  # 10:30+
+]
+
+_DEPARTURE_OFFSETS: list[tuple[int | None, int | None]] = [
+    (None, -30),  # before 16:30
+    (-30, -15),  # 16:30–16:45
+    (-15, 0),  # 16:45–17:00
+    (0, 15),  # 17:00–17:15
+    (15, 30),  # 17:15–17:30
+    (30, 45),  # 17:30–17:45
+    (45, None),  # 17:45+
+]
+
+
+def _bucket_label(anchor: int, low: int | None, high: int | None) -> str:
+    if low is None:
+        return f"Before {_fmt_hhmm(anchor + (high or 0))}"
+    if high is None:
+        return f"{_fmt_hhmm(anchor + low)}+"
+    return f"{_fmt_hhmm(anchor + low)}–{_fmt_hhmm(anchor + high)}"
+
+
+def _fixed_buckets(
+    samples: list[int],
+    *,
+    anchor: int,
+    offsets: list[tuple[int | None, int | None]],
+) -> list[HistogramBin]:
+    """Distribute minutes-of-day samples into the fixed windows.
+
+    Bounds are half-open [low, high) relative to `anchor`; the first bucket
+    catches everything below its upper edge and the last everything at or
+    above its lower edge, so every sample lands in exactly one bucket.
+    """
+    bins: list[HistogramBin] = []
+    for low, high in offsets:
+        lo = None if low is None else anchor + low
+        hi = None if high is None else anchor + high
+        count = sum(
+            1
+            for s in samples
+            if (lo is None or s >= lo) and (hi is None or s < hi)
+        )
+        bins.append(HistogramBin(label=_bucket_label(anchor, low, high), count=count))
+    return bins
+
+
 def _gap_status(
     day: date,
     *,
@@ -185,13 +328,13 @@ def _gap_status(
 ) -> str:
     """Status for a day the employees service emitted no row for.
 
-    Order matters: an employee not scheduled that weekday is on their day
-    off even if it's also the org WFH weekday. When there's no schedule
+    Order matters: an employee not scheduled that weekday is on their
+    weekend even if it's also the org WFH weekday. When there's no schedule
     info (phase-1 `working is None`) we can only distinguish WFH weekdays
     and upcoming days.
     """
     if working is not None and emp_code not in working:
-        return STATUS_DAY_OFF
+        return STATUS_WEEKEND
     if day.weekday() in rule.wfh_weekdays:
         return STATUS_WFH
     # A past scheduled day with no row only happens when absence detection
@@ -207,12 +350,14 @@ def _day_line(
     rule: ShiftRule,
     working: frozenset[str] | None,
 ) -> DayLine:
-    date_label = _fmt_ddmmyyyy(day)
+    date_label = day.strftime("%d/%m/%Y")
     weekday = day.strftime("%a")
 
     if row is None:
         status = _gap_status(day, emp_code=emp_code, rule=rule, working=working)
-        return DayLine(date_label, weekday, status, _DASH, _DASH, _DASH, "")
+        return DayLine(
+            date_label, weekday, status, _DASH, _DASH, _DASH, "", _DASH
+        )
 
     if row.on_holiday:
         status = STATUS_HOLIDAY
@@ -227,6 +372,11 @@ def _day_line(
         if row.punch_in is not None and day.weekday() not in rule.wfh_weekdays:
             late_min = shift_rules.minutes_late(row.punch_in, rule, day)
         status = STATUS_LATE if late_min >= 1 else STATUS_PRESENT
+        # Shortfall against the full day, floored at zero — a long day reads
+        # as "nothing missing", never as negative missing hours.
+        missing = _DASH
+        if row.worked_minutes is not None:
+            missing = _fmt_minutes(max(0, rule.full_day_minutes - row.worked_minutes))
         return DayLine(
             date_label,
             weekday,
@@ -235,6 +385,7 @@ def _day_line(
             _fmt_time(row.punch_out),
             _fmt_minutes(row.worked_minutes),
             f"{late_min}m" if late_min >= 1 else "",
+            missing,
         )
 
     # Excused / absent day. Punch times stay visible when present (someone
@@ -247,7 +398,48 @@ def _day_line(
         _fmt_time(row.punch_out),
         _DASH,
         "",
+        _DASH,
     )
+
+
+_WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _schedule_label(
+    emp_code: str,
+    days: list[date],
+    working_by_day: Mapping[date, frozenset[str] | None],
+) -> str:
+    """The employee's working week, e.g. "Sun – Thu" or "Sun, Tue, Thu".
+
+    Derived from the days in the period their own schedule covers, so a
+    Fri–Sat worker reads correctly rather than assuming the org default.
+    Contiguous runs (wrapping Sun→Sat) collapse to a range; anything else
+    lists the days. "—" when the period carries no schedule data.
+    """
+    weekdays = {
+        day.weekday()
+        for day in days
+        if (working := working_by_day.get(day)) is not None and emp_code in working
+    }
+    if not weekdays:
+        return _DASH
+    if len(weekdays) == 7:
+        return "Every day"
+
+    # Rotate so the run starts at a weekday whose predecessor is off, then
+    # a single unbroken block means the pattern is a range.
+    start = next(d for d in range(7) if d in weekdays and (d - 1) % 7 not in weekdays)
+    ordered = [(start + i) % 7 for i in range(7)]
+    run = [d for d in ordered if d in weekdays]
+    contiguous = all(
+        (run[i] + 1) % 7 == run[i + 1] for i in range(len(run) - 1)
+    )
+    if len(run) == 1:
+        return _WEEKDAY_NAMES[run[0]]
+    if contiguous:
+        return f"{_WEEKDAY_NAMES[run[0]]} – {_WEEKDAY_NAMES[run[-1]]}"
+    return ", ".join(_WEEKDAY_NAMES[d] for d in run)
 
 
 def _overview_row(s: EmployeeSection) -> list[str]:
@@ -271,6 +463,7 @@ def build_attendance_report(
     period_label: str,
     generated_on: date,
     department_by_emp_code: Mapping[str, str],
+    pod_by_emp_code: Mapping[str, str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
     emp_codes: frozenset[str] | None = None,
 ) -> AttendanceReport:
@@ -285,6 +478,7 @@ def build_attendance_report(
     convention, not a reading one).
     """
     working_by_day = working_emp_codes_by_day or {}
+    pods = pod_by_emp_code or {}
 
     selected = [
         emp
@@ -293,18 +487,24 @@ def build_attendance_report(
     ]
     selected.sort(key=lambda emp: emp.name.casefold())
 
+    shift_end = _shift_end_minutes(rule)
+
     sections: list[EmployeeSection] = []
     # Org-wide accumulators for the summary stats.
     org_arrivals: list[int] = []
+    org_departures: list[int] = []
     org_attended = org_late = org_absent = org_leave = org_holiday = 0
+    org_on_time = org_dep_on_time = org_dep_recorded = 0
     org_worked_minutes = 0
 
     for emp in selected:
         by_iso = {d.date: d for d in emp.days}
         lines: list[DayLine] = []
         arrivals: list[int] = []
+        departures: list[int] = []
         attended = late = absent = leave = holiday = missing_out = 0
-        worked_minutes = 0
+        dep_on_time = dep_recorded = wfh = 0
+        worked_minutes = missing_minutes = 0
 
         for day in days:
             row = by_iso.get(day.isoformat())
@@ -326,21 +526,37 @@ def build_attendance_report(
                         arrivals.append(_minutes_of_day(row.punch_in))
                         if row.punch_out is None:
                             missing_out += 1
+                    if row.punch_out is not None:
+                        out_minutes = _minutes_of_day(row.punch_out)
+                        departures.append(out_minutes)
+                        dep_recorded += 1
+                        if out_minutes >= shift_end:
+                            dep_on_time += 1
                     if row.worked_minutes is not None:
                         worked_minutes += row.worked_minutes
+                        missing_minutes += max(
+                            0, rule.full_day_minutes - row.worked_minutes
+                        )
             elif line.status == STATUS_ABSENT:
                 absent += 1
             elif line.status == STATUS_ON_LEAVE:
                 leave += 1
             elif line.status == STATUS_HOLIDAY:
                 holiday += 1
+            elif line.status == STATUS_WFH:
+                wfh += 1
 
         expected = attended + absent
+        on_time = attended - late
         sections.append(
             EmployeeSection(
                 emp_code=emp.emp_code,
                 name=emp.name,
                 department=department_by_emp_code.get(emp.emp_code, ""),
+                pod=pods.get(emp.emp_code, ""),
+                schedule_label=_schedule_label(emp.emp_code, days, working_by_day),
+                shift_start=_fmt_hhmm(_shift_start_minutes(rule)),
+                shift_end=_fmt_hhmm(shift_end),
                 days_expected=expected,
                 days_attended=attended,
                 days_late=late,
@@ -348,24 +564,36 @@ def build_attendance_report(
                 days_on_leave=leave,
                 days_holiday=holiday,
                 missing_signouts=missing_out,
+                days_on_time=on_time,
+                departures_on_time=dep_on_time,
+                departures_recorded=dep_recorded,
+                missing_minutes=missing_minutes,
+                days_wfh=wfh,
                 avg_arrival=_fmt_avg_minutes_of_day(arrivals),
+                avg_departure=_fmt_avg_minutes_of_day(departures),
                 total_worked=_fmt_minutes(worked_minutes),
+                expected_worked=_fmt_minutes(expected * rule.full_day_minutes),
                 avg_worked=(
                     _fmt_minutes(round(worked_minutes / attended))
                     if attended and worked_minutes
                     else _DASH
                 ),
+                full_day=_fmt_minutes(rule.full_day_minutes),
                 attendance_pct=_fmt_pct(attended, expected),
                 days=lines,
             )
         )
 
         org_arrivals.extend(arrivals)
+        org_departures.extend(departures)
         org_attended += attended
         org_late += late
         org_absent += absent
         org_leave += leave
         org_holiday += holiday
+        org_on_time += on_time
+        org_dep_on_time += dep_on_time
+        org_dep_recorded += dep_recorded
         org_worked_minutes += worked_minutes
 
     stats = _summary_stats(
@@ -382,38 +610,96 @@ def build_attendance_report(
 
     return AttendanceReport(
         title="Attendance Report",
+        subtitle="Team Summary",
         period_label=period_label,
         generated_label=f"Generated {_fmt_ddmmyyyy(generated_on)}",
+        generated_on=generated_on.strftime("%d/%m/%Y"),
+        employee_count=len(sections),
+        key_metrics=_key_metrics(
+            n_employees=len(sections),
+            attended=org_attended,
+            absent=org_absent,
+            on_time=org_on_time,
+            dep_on_time=org_dep_on_time,
+            dep_recorded=org_dep_recorded,
+        ),
         stats=stats,
-        arrival_histogram=_arrival_histogram(org_arrivals),
+        arrival_buckets=_fixed_buckets(
+            org_arrivals,
+            anchor=_shift_start_minutes(rule),
+            offsets=_ARRIVAL_OFFSETS,
+        ),
+        departure_buckets=_fixed_buckets(
+            org_departures, anchor=shift_end, offsets=_DEPARTURE_OFFSETS
+        ),
+        rankings=_rankings(sections),
         overview_columns=list(OVERVIEW_COLUMNS),
         overview_rows=[_overview_row(s) for s in sections],
         sections=sections,
     )
 
 
-_HISTOGRAM_BUCKET_MINUTES = 30
+def _key_metrics(
+    *,
+    n_employees: int,
+    attended: int,
+    absent: int,
+    on_time: int,
+    dep_on_time: int,
+    dep_recorded: int,
+) -> list[KeyMetric]:
+    """The four hero tiles: attendance, punctuality, departures, headcount."""
+    expected = attended + absent
+    return [
+        KeyMetric(
+            "Attendance rate",
+            _fmt_pct(attended, expected),
+            "Attended ÷ expected office days",
+        ),
+        KeyMetric(
+            "Punctuality rate",
+            _fmt_pct(on_time, attended),
+            "On-time ÷ present days",
+        ),
+        KeyMetric(
+            "On-time departures",
+            _fmt_pct(dep_on_time, dep_recorded),
+            "Left at/after shift end",
+        ),
+        KeyMetric("Total employees", str(n_employees), "In this report"),
+    ]
 
 
-def _arrival_histogram(arrivals: list[int]) -> list[HistogramBin]:
-    """Bucket arrival minutes-of-day into fixed 30-minute windows.
+_RANKING_SIZE = 3
 
-    Spans from the bucket containing the earliest arrival to the one
-    containing the latest, with empty buckets in between kept so the shape
-    reads correctly (a gap at 10:00 matters). Mirrors the dashboard's
-    arrival chart bucketing.
+
+def _rankings(sections: list[EmployeeSection]) -> list[Ranking]:
+    """The four Top Rankings podiums.
+
+    Each is the top `_RANKING_SIZE` employees by one measure, ties broken by
+    name so the order is stable. Employees scoring zero are left out — a
+    podium of zeroes says nothing — which is why a column can come back with
+    fewer than three entries (the renderer pads with em-dashes).
     """
-    if not arrivals:
-        return []
-    step = _HISTOGRAM_BUCKET_MINUTES
-    first = (min(arrivals) // step) * step
-    last = (max(arrivals) // step) * step
-    bins: list[HistogramBin] = []
-    for start in range(first, last + step, step):
-        count = sum(1 for a in arrivals if start <= a < start + step)
-        h, m = divmod(start, 60)
-        bins.append(HistogramBin(label=f"{h:02d}:{m:02d}", count=count))
-    return bins
+
+    def podium(
+        key, fmt, title: str
+    ) -> Ranking:
+        ranked = sorted(
+            (s for s in sections if key(s) > 0),
+            key=lambda s: (-key(s), s.name.casefold()),
+        )[:_RANKING_SIZE]
+        return Ranking(
+            title=title,
+            entries=[RankingEntry(s.name, fmt(key(s))) for s in ranked],
+        )
+
+    return [
+        podium(lambda s: s.days_absent, str, "Top Absentees"),
+        podium(lambda s: s.days_late, str, "Most Late Arrivals"),
+        podium(lambda s: s.missing_minutes, _fmt_minutes, "Most Hours Missing"),
+        podium(lambda s: s.missing_signouts, str, "Missing Sign-in/out"),
+    ]
 
 
 def _summary_stats(

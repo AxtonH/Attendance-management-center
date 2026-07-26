@@ -16,6 +16,7 @@ from app.infra.odoo_client import OdooClient
 from app.infra.odoo_employees import (
     EMP_CODE_FIELD,
     NAME_FIELD,
+    POD_FIELD,
     OdooEmployeeRepository,
 )
 
@@ -87,6 +88,26 @@ class TestOdooEmployeeRepository:
         assert names["17"] == "Sara Khalil"
         # Unset name falls back to the emp_code so the row stays usable.
         assert names["38"] == "38"
+
+    def test_pods_read_every_studio_tag_shape(self):
+        # A Studio tag field arrives in several shapes over XML-RPC depending
+        # on how it was defined. Read the ones carrying a name; never render
+        # a bare id, and never crash on the unset form.
+        rows = [
+            {EMP_CODE_FIELD: "1", POD_FIELD: [7, "Motion"]},  # many2one
+            {EMP_CODE_FIELD: "2", POD_FIELD: "Design"},  # selection/char
+            {EMP_CODE_FIELD: "3", POD_FIELD: False},  # unset
+            {EMP_CODE_FIELD: "4", POD_FIELD: [7, 9]},  # many2many ids only
+            {EMP_CODE_FIELD: "5", POD_FIELD: "  Brand  "},  # padded
+        ]
+        repo = OdooEmployeeRepository(FakeOdooClient(rows), cache_ttl_seconds=60)
+        assert repo.pods() == {
+            "1": "Motion",
+            "2": "Design",
+            "3": "",
+            "4": "",
+            "5": "Brand",
+        }
 
     def test_display_names_and_codes_share_one_fetch(self):
         client = FakeOdooClient([{EMP_CODE_FIELD: "1001", NAME_FIELD: "A"}])

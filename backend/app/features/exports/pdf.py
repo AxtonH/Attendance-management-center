@@ -10,6 +10,7 @@ No attendance logic here — just layout.
 from __future__ import annotations
 
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -33,6 +34,7 @@ from app.features.exports.report import (
     STATUS_LATE,
     STATUS_ON_LEAVE,
     STATUS_UPCOMING,
+    STATUS_WEEKEND,
     STATUS_WFH,
     AttendanceReport,
     EmployeeSection,
@@ -52,10 +54,11 @@ _STATUS_COLORS: dict[str, colors.Color] = {
     STATUS_ON_LEAVE: colors.HexColor("#1E40AF"),
     STATUS_HOLIDAY: colors.HexColor("#065F46"),
     STATUS_WFH: colors.HexColor("#8C8C90"),
+    STATUS_WEEKEND: colors.HexColor("#8C8C90"),
     STATUS_DAY_OFF: colors.HexColor("#8C8C90"),
     STATUS_UPCOMING: colors.HexColor("#C4C4C8"),
 }
-_MUTED_STATUSES = (STATUS_WFH, STATUS_DAY_OFF, STATUS_UPCOMING)
+_MUTED_STATUSES = (STATUS_WFH, STATUS_WEEKEND, STATUS_DAY_OFF, STATUS_UPCOMING)
 
 _STYLES = getSampleStyleSheet()
 _TITLE = ParagraphStyle(
@@ -71,10 +74,26 @@ _H2 = ParagraphStyle(
     spaceBefore=0,
     spaceAfter=2,
 )
+# Text cells inside tables. Plain strings in a reportlab Table never wrap —
+# a long employee name just overflows into the next column — so free-text
+# columns are rendered as Paragraphs, which wrap within their column width.
+_CELL = ParagraphStyle(
+    "RptCell", parent=_STYLES["Normal"], fontSize=8, leading=9.5
+)
+_CELL_MUTED = ParagraphStyle("RptCellMuted", parent=_CELL, textColor=_MUTED)
 
 # Portrait A4 content width is ~190mm (10mm margins).
-_OVERVIEW_WIDTHS_MM = [42, 32, 17, 12, 14, 17, 20, 22]
+_OVERVIEW_WIDTHS_MM = [48, 30, 16, 12, 14, 16, 20, 20]
 _DAY_WIDTHS_MM = [24, 13, 22, 19, 19, 19, 15]
+
+
+def _text_cell(value: str, style: ParagraphStyle = _CELL) -> Paragraph:
+    """A wrapping table cell for user-supplied text.
+
+    Escaped because Paragraph parses inline markup — a department like
+    "People & Culture" must render literally, not as a broken entity.
+    """
+    return Paragraph(escape(value), style)
 
 
 def render_pdf(report: AttendanceReport) -> bytes:
@@ -98,15 +117,12 @@ def render_pdf(report: AttendanceReport) -> bytes:
         _stats_table(report),
         Spacer(1, 6 * mm),
     ]
-    if report.arrival_histogram:
-        # Same dashboard-style chart PNG the Excel summary embeds. Keep the
-        # source aspect ratio (chart.WIDTH × chart.HEIGHT).
-        png = chart.render_arrival_chart_png(report.arrival_histogram)
-        img_w = 140 * mm
-        img_h = img_w * chart.HEIGHT / chart.WIDTH
-        elements.append(Paragraph("Arrival pattern", _H2))
+    if report.arrival_buckets and report.departure_buckets:
+        # The Excel summary's side-by-side arrival/departure bar charts,
+        # rendered as PNGs over the same fixed bucket windows.
+        elements.append(Paragraph("Arrival &amp; departure pattern", _H2))
         elements.append(Spacer(1, 2 * mm))
-        elements.append(PdfImage(BytesIO(png), width=img_w, height=img_h, hAlign="LEFT"))
+        elements.append(_pattern_charts(report))
         elements.append(Spacer(1, 6 * mm))
     if report.overview_rows:
         elements.append(_overview_table(report))
@@ -119,6 +135,36 @@ def render_pdf(report: AttendanceReport) -> bytes:
 
     doc.build(elements)
     return buffer.getvalue()
+
+
+def _pattern_charts(report: AttendanceReport) -> Table:
+    """Arrival and departure bucket charts side by side, equal widths."""
+    img_w = 92 * mm
+    img_h = img_w * chart.HEIGHT / chart.WIDTH
+    cells = [
+        PdfImage(
+            BytesIO(chart.render_bucket_chart_png(bins, title=title)),
+            width=img_w,
+            height=img_h,
+        )
+        for title, bins in (
+            ("Arrivals", report.arrival_buckets),
+            ("Departures", report.departure_buckets),
+        )
+    ]
+    tbl = Table([cells], colWidths=[95 * mm, 95 * mm], hAlign="LEFT")
+    tbl.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (0, 0), "LEFT"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    return tbl
 
 
 def _stats_table(report: AttendanceReport) -> Table:
@@ -146,9 +192,14 @@ def _stats_table(report: AttendanceReport) -> Table:
 
 
 def _overview_table(report: AttendanceReport) -> Table:
-    data = [report.overview_columns, *report.overview_rows]
+    # Employee and Department are free text and must wrap inside their
+    # columns; the remaining columns are short fixed-format values.
+    rows = [
+        [_text_cell(row[0]), _text_cell(row[1], _CELL_MUTED), *row[2:]]
+        for row in report.overview_rows
+    ]
     tbl = Table(
-        data,
+        [report.overview_columns, *rows],
         colWidths=[w * mm for w in _OVERVIEW_WIDTHS_MM],
         repeatRows=1,
     )
@@ -157,10 +208,12 @@ def _overview_table(report: AttendanceReport) -> Table:
 
 
 def _employee_page(section: EmployeeSection, period_label: str) -> list:
-    dept = f" · {section.department}" if section.department else ""
+    # Name and department are user data headed into Paragraphs — escape so
+    # markup-significant characters (& < >) render literally.
+    dept = f" · {escape(section.department)}" if section.department else ""
     elements: list = [
-        Paragraph(section.name, _H2),
-        Paragraph(f"Emp code {section.emp_code}{dept}", _SUBTITLE),
+        Paragraph(escape(section.name), _H2),
+        Paragraph(f"Emp code {escape(section.emp_code)}{dept}", _SUBTITLE),
         Paragraph(period_label, _SUBTITLE),
         Spacer(1, 4 * mm),
     ]
@@ -205,7 +258,15 @@ def _employee_page(section: EmployeeSection, period_label: str) -> list:
 
 
 def _day_table(section: EmployeeSection) -> Table:
-    columns = ["Date", "Day", "Status", "Check-in", "Check-out", "Worked", "Late by"]
+    columns = [
+        "Date",
+        "Day",
+        "Status",
+        "Check-in",
+        "Check-out",
+        "Worked",
+        "Missing hours",
+    ]
     data = [columns]
     style = _table_base_style()
 
@@ -218,7 +279,7 @@ def _day_table(section: EmployeeSection) -> Table:
                 line.check_in,
                 line.check_out,
                 line.worked,
-                line.late_by,
+                line.missing_hours,
             ]
         )
         color = _STATUS_COLORS.get(line.status)

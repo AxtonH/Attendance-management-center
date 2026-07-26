@@ -1,75 +1,84 @@
-"""Draw the arrival-pattern chart as a PNG (Pillow).
+"""Draw an arrival/departure bucket bar chart as a PNG (Pillow).
 
-Visually mirrors the dashboard's ArrivalHistogram (recharts): a smooth
-monotone area curve in the app's indigo accent, gradient-faded to the
-baseline, small gray time labels along the bottom, no axes or gridlines.
-Both export renderers embed the PNG, so the file matches the screen.
+The PDF renderer's counterpart of the Excel summary's native bar charts:
+solid bars in the Prezlab deep-teal ink over the fixed time windows, the
+count above each bar, the window label beneath. Drawn at 3× and downscaled
+for antialiasing (Pillow's rectangle fill isn't antialiased at the edges of
+text). Pure function of the bins — no I/O beyond the returned bytes.
 
-Drawn at 3× and downscaled for antialiasing (Pillow's polygon fill isn't
-antialiased). Pure function of the bins — no I/O beyond the returned bytes.
+The Excel renderer doesn't use this module; its charts are native Excel
+charts anchored to the sheet grid.
 """
 
 from __future__ import annotations
 
 from io import BytesIO
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from app.features.exports.report import HistogramBin
 
-_ACCENT = (79, 70, 229)  # #4F46E5 — app accent
-_LABEL = (140, 140, 144)  # #8C8C90 — app text-tertiary
-_AREA_ALPHA = 0.35  # gradient opacity at the top, fading to 0 (dashboard)
+_INK = (0, 37, 40)  # #002528 — Prezlab deep teal, same as the Excel bars
+_MUTED = (98, 132, 140)  # #62848C — slate, secondary labels
+_BASELINE = (213, 222, 224)  # #D5DEE0 — hairline under the bars
 
 # Logical (embedded) size in px; drawn at _SCALE× then downscaled.
 WIDTH = 560
-HEIGHT = 200
+HEIGHT = 240
 _SCALE = 3
 
 
-def render_arrival_chart_png(bins: list[HistogramBin]) -> bytes:
-    """The arrival histogram as PNG bytes. `bins` must be non-empty."""
+def render_bucket_chart_png(bins: list[HistogramBin], *, title: str) -> bytes:
+    """One bucket distribution as PNG bytes. `bins` must be non-empty."""
     scale = _SCALE
     w, h = WIDTH * scale, HEIGHT * scale
-    pad_top = 12 * scale
-    pad_side = 14 * scale
-    label_band = 26 * scale
-    plot_w = w - 2 * pad_side
-    plot_h = h - pad_top - label_band
-    baseline = pad_top + plot_h
+    pad_side = 10 * scale
+    title_band = 30 * scale
+    count_band = 18 * scale  # the value above each bar
+    label_band = 40 * scale  # two staggered rows of window labels
+    plot_h = h - title_band - count_band - label_band
+    baseline = title_band + count_band + plot_h
 
     img = Image.new("RGB", (w, h), "white")
+    draw = ImageDraw.Draw(img)
+
+    title_font = _font(14 * scale, bold=True)
+    count_font = _font(12 * scale)
+    label_font = _font(12 * scale)
+
+    _centered(draw, title, w / 2, 8 * scale, title_font, _INK)
 
     n = len(bins)
     max_count = max(b.count for b in bins) or 1
-    xs = [
-        pad_side + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
-        for i in range(n)
-    ]
-    ys = [pad_top + plot_h * (1 - b.count / max_count) for b in bins]
-    curve = _monotone_curve(xs, ys)
+    slot = (w - 2 * pad_side) / n
+    bar_w = slot * 0.55
 
-    # Area fill: an accent overlay whose alpha is the *minimum* of a vertical
-    # fade (strong at the top of the plot, zero at the baseline) and the
-    # area-under-curve mask — exactly recharts' linearGradient fill.
-    mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).polygon(
-        [*curve, (xs[-1], baseline), (xs[0], baseline)], fill=255
+    draw.line(
+        [(pad_side, baseline), (w - pad_side, baseline)],
+        fill=_BASELINE,
+        width=scale,
     )
-    fade = Image.new("L", (w, h), 0)
-    fade_draw = ImageDraw.Draw(fade)
-    top_alpha = int(255 * _AREA_ALPHA)
-    for y in range(pad_top, baseline):
-        t = (y - pad_top) / plot_h
-        fade_draw.line([(0, y), (w, y)], fill=int(top_alpha * (1 - t)))
-    alpha = ImageChops.darker(mask, fade)
-    img.paste(Image.new("RGB", (w, h), _ACCENT), (0, 0), alpha)
 
-    # The curve stroke on top of the fill.
-    draw = ImageDraw.Draw(img)
-    draw.line(curve, fill=_ACCENT, width=2 * scale, joint="curve")
-
-    _draw_labels(draw, bins, xs, baseline, scale)
+    for i, bin_ in enumerate(bins):
+        cx = pad_side + slot * (i + 0.5)
+        bar_h = plot_h * bin_.count / max_count
+        if bin_.count:
+            draw.rectangle(
+                [cx - bar_w / 2, baseline - bar_h, cx + bar_w / 2, baseline],
+                fill=_INK,
+            )
+        _centered(
+            draw,
+            str(bin_.count),
+            cx,
+            baseline - bar_h - 16 * scale,
+            count_font,
+            _INK if bin_.count else _MUTED,
+        )
+        # Window labels are wider than a slot at a readable size, so odd
+        # and even labels sit on alternating rows instead of overlapping.
+        label_top = baseline + (6 if i % 2 == 0 else 21) * scale
+        _centered(draw, bin_.label, cx, label_top, label_font, _MUTED)
 
     img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
     buffer = BytesIO()
@@ -77,78 +86,31 @@ def render_arrival_chart_png(bins: list[HistogramBin]) -> bytes:
     return buffer.getvalue()
 
 
-def _draw_labels(
+def _centered(
     draw: ImageDraw.ImageDraw,
-    bins: list[HistogramBin],
-    xs: list[float],
-    baseline: float,
-    scale: int,
+    text: str,
+    cx: float,
+    top: float,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
+    fill: tuple[int, int, int],
 ) -> None:
-    """Time labels under the plot — first, last, and evenly spaced between
-    (recharts' interval="preserveStartEnd" behavior)."""
-    font = _font(10 * scale)
-    n = len(bins)
-    step = max(1, -(-n // 8))  # ceil — at most ~8 labels
-    indices = {0, n - 1, *range(0, n, step)}
-    y = baseline + 8 * scale
-    for i in sorted(indices):
-        label = bins[i].label
-        bbox = draw.textbbox((0, 0), label, font=font)
-        text_w = bbox[2] - bbox[0]
-        draw.text((xs[i] - text_w / 2, y), label, font=font, fill=_LABEL)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text((cx - (bbox[2] - bbox[0]) / 2, top), text, font=font, fill=fill)
 
 
-def _font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+def _font(
+    size: int, *, bold: bool = False
+) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     """A small sans font: system TTFs when available (Windows dev, most
     Linux images), Pillow's bundled default otherwise."""
-    for name in ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf"):
+    names = (
+        ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf")
+        if bold
+        else ("segoeui.ttf", "arial.ttf", "DejaVuSans.ttf")
+    )
+    for name in names:
         try:
             return ImageFont.truetype(name, size)
         except OSError:
             continue
     return ImageFont.load_default(size)
-
-
-def _monotone_curve(
-    xs: list[float], ys: list[float], samples_per_segment: int = 24
-) -> list[tuple[float, float]]:
-    """Sample a monotone cubic (Fritsch–Carlson) interpolation of the points.
-
-    Same family of curve as recharts' type="monotone": smooth, but never
-    overshooting past the data values, so a zero bucket stays at zero.
-    """
-    n = len(xs)
-    if n == 1:
-        return [(xs[0], ys[0]), (xs[0] + 1, ys[0])]
-
-    dx = [xs[i + 1] - xs[i] for i in range(n - 1)]
-    slopes = [(ys[i + 1] - ys[i]) / dx[i] for i in range(n - 1)]
-
-    # Tangents: harmonic mean of neighboring slopes; zero at local extrema
-    # (sign change) so the curve doesn't overshoot.
-    tangents = [slopes[0]]
-    for i in range(1, n - 1):
-        if slopes[i - 1] * slopes[i] <= 0:
-            tangents.append(0.0)
-        else:
-            tangents.append(2 / (1 / slopes[i - 1] + 1 / slopes[i]))
-    tangents.append(slopes[-1])
-
-    points: list[tuple[float, float]] = []
-    for i in range(n - 1):
-        for s in range(samples_per_segment):
-            t = s / samples_per_segment
-            h00 = (1 + 2 * t) * (1 - t) ** 2
-            h10 = t * (1 - t) ** 2
-            h01 = t * t * (3 - 2 * t)
-            h11 = t * t * (t - 1)
-            x = xs[i] + t * dx[i]
-            y = (
-                h00 * ys[i]
-                + h10 * dx[i] * tangents[i]
-                + h01 * ys[i + 1]
-                + h11 * dx[i] * tangents[i + 1]
-            )
-            points.append((x, y))
-    points.append((xs[-1], ys[-1]))
-    return points
