@@ -15,9 +15,14 @@ logic, and column/label changes happen in exactly one place.
 Built from the same `EmployeesWeekResponse` the Employees pages render, so
 screen and file always agree.
 
+WFH days come from each employee's shift (see `app.shared.wfh`), not from
+a WFH request log: the "WFH days" figure counts scheduled WFH days up to the
+report date on which the employee didn't come in and wasn't on leave or a
+public holiday. The section's `wfh_label` names those weekdays so the
+figure is read as shift-based.
+
 NOTE — template fields not yet tracked by this system:
   - Position / Line manager: not in the Odoo payload we mirror.
-  - Days WFH per employee: phase-1 uses the org-wide `wfh_weekdays` rule.
   - Missing sign-ins: punches are collapsed to first/last per day, so a
     missing *first* punch is indistinguishable from a normal arrival. The
     "Missing sign-in/out" figures therefore count missing sign-*outs* only.
@@ -40,6 +45,7 @@ from datetime import date, datetime
 from app.features.employees.models import EmployeesWeekResponse, EmployeeWeekDay
 from app.shared import shift_rules
 from app.shared.models import ShiftRule
+from app.shared.wfh import is_wfh
 
 # Day statuses. Present/Late/Absent/On leave/Holiday mirror the on-screen
 # pills; WFH / Day off / Upcoming fill the calendar gaps the screen doesn't
@@ -49,6 +55,8 @@ STATUS_LATE = "Late"
 STATUS_ABSENT = "Absent"
 STATUS_ON_LEAVE = "On leave"
 STATUS_HOLIDAY = "Holiday"
+# A scheduled WFH day per the employee's shift (up to the report date) with
+# no office punch and no leave/holiday.
 STATUS_WFH = "WFH"
 # A day the employee's own schedule doesn't cover. Not a fixed Fri/Sat: shift
 # patterns differ, so someone working Fri–Sat has their weekend on Sun–Mon.
@@ -91,6 +99,7 @@ class EmployeeSection:
     department: str
     pod: str  # Odoo `x_studio_pod`; "" when unset
     schedule_label: str  # "Sun – Thu" or "—" without schedule data
+    wfh_label: str  # the shift's WFH weekdays in the period, "Thu, Fri" or "—"
     shift_start: str  # "09:00"
     shift_end: str  # "17:00" — derived from start + full_day_minutes
     days_expected: int
@@ -106,7 +115,7 @@ class EmployeeSection:
     # Shortfall against `full_day_minutes` summed over attended days, floored
     # at zero per day (overtime on one day never offsets a short day).
     missing_minutes: int
-    days_wfh: int
+    days_wfh: int  # STATUS_WFH days: shift WFH days, up to the report date
     avg_arrival: str  # "09:12" or "—"
     avg_departure: str  # "17:04" or "—"
     total_worked: str  # "142h 20m"
@@ -323,19 +332,21 @@ def _gap_status(
     day: date,
     *,
     emp_code: str,
-    rule: ShiftRule,
     working: frozenset[str] | None,
+    wfh: bool,
+    today: date,
 ) -> str:
     """Status for a day the employees service emitted no row for.
 
-    Order matters: an employee not scheduled that weekday is on their
-    weekend even if it's also the org WFH weekday. When there's no schedule
-    info (phase-1 `working is None`) we can only distinguish WFH weekdays
-    and upcoming days.
+    Order matters: an employee not scheduled that day is on their weekend
+    (a WFH day is always inside the shift, so the two never truly collide).
+    A WFH day only reads as WFH once it has arrived; a future one is
+    upcoming like any other scheduled day, so "WFH days" never counts days
+    that haven't happened.
     """
     if working is not None and emp_code not in working:
         return STATUS_WEEKEND
-    if day.weekday() in rule.wfh_weekdays:
+    if wfh and day <= today:
         return STATUS_WFH
     # A past scheduled day with no row only happens when absence detection
     # is off (phase-1) or the day is still pre-cutoff — nothing to assert.
@@ -349,12 +360,16 @@ def _day_line(
     emp_code: str,
     rule: ShiftRule,
     working: frozenset[str] | None,
+    wfh: bool,
+    today: date,
 ) -> DayLine:
     date_label = day.strftime("%d/%m/%Y")
     weekday = day.strftime("%a")
 
     if row is None:
-        status = _gap_status(day, emp_code=emp_code, rule=rule, working=working)
+        status = _gap_status(
+            day, emp_code=emp_code, working=working, wfh=wfh, today=today
+        )
         return DayLine(
             date_label, weekday, status, _DASH, _DASH, _DASH, "", _DASH
         )
@@ -366,16 +381,17 @@ def _day_line(
     elif row.absent:
         status = STATUS_ABSENT
     else:
-        # A worked day. Lateness never fires on WFH weekdays — same rule the
-        # dashboard exception detectors apply.
+        # A worked day. On the employee's WFH day an office visit is
+        # voluntary: never late and no missing hours — the same rules the
+        # dashboard's late and incomplete-hours detectors apply.
         late_min = 0
-        if row.punch_in is not None and day.weekday() not in rule.wfh_weekdays:
+        if row.punch_in is not None and not wfh:
             late_min = shift_rules.minutes_late(row.punch_in, rule, day)
         status = STATUS_LATE if late_min >= 1 else STATUS_PRESENT
         # Shortfall against the full day, floored at zero — a long day reads
         # as "nothing missing", never as negative missing hours.
         missing = _DASH
-        if row.worked_minutes is not None:
+        if row.worked_minutes is not None and not wfh:
             missing = _fmt_minutes(max(0, rule.full_day_minutes - row.worked_minutes))
         return DayLine(
             date_label,
@@ -442,6 +458,21 @@ def _schedule_label(
     return ", ".join(_WEEKDAY_NAMES[d] for d in run)
 
 
+# Prezlab's week runs Sun–Sat (see `week_range_for`), so list days that way.
+_WEEK_ORDER = [6, 0, 1, 2, 3, 4, 5]
+
+
+def _wfh_label(weekdays: set[int]) -> str:
+    """The shift's WFH weekdays as a plain list: "Thu", "Thu, Fri", or "—".
+
+    Always a list, never a range: "Thu, Fri" reads more plainly than
+    "Thu – Fri" for the two- and three-day patterns in use.
+    """
+    if not weekdays:
+        return _DASH
+    return ", ".join(_WEEKDAY_NAMES[d] for d in _WEEK_ORDER if d in weekdays)
+
+
 def _overview_row(s: EmployeeSection) -> list[str]:
     return [
         s.name,
@@ -466,6 +497,7 @@ def build_attendance_report(
     pod_by_emp_code: Mapping[str, str] | None = None,
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
     emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
 ) -> AttendanceReport:
     """Shape the employees response into the two-level report.
 
@@ -473,11 +505,16 @@ def build_attendance_report(
     employees get a section and count toward the summary stats. None means
     everyone in the response.
 
+    `wfh_emp_codes_by_day` is the roster's per-day WFH set (from each
+    employee's shift); a missing day or map falls back to the org-wide
+    `rule.wfh_weekdays`.
+
     Sections are sorted by name (a report reads alphabetically; the
     emp-code-descending order of the on-screen table is a scanning
     convention, not a reading one).
     """
     working_by_day = working_emp_codes_by_day or {}
+    wfh_by_day = wfh_emp_codes_by_day or {}
     pods = pod_by_emp_code or {}
 
     selected = [
@@ -505,15 +542,24 @@ def build_attendance_report(
         attended = late = absent = leave = holiday = missing_out = 0
         dep_on_time = dep_recorded = wfh = 0
         worked_minutes = missing_minutes = 0
+        wfh_weekdays: set[int] = set()
 
         for day in days:
             row = by_iso.get(day.isoformat())
+            working = working_by_day.get(day)
+            day_is_wfh = is_wfh(
+                emp.emp_code, day, wfh_by_day.get(day), rule.wfh_weekdays
+            )
+            if day_is_wfh and (working is None or emp.emp_code in working):
+                wfh_weekdays.add(day.weekday())
             line = _day_line(
                 day,
                 row,
                 emp_code=emp.emp_code,
                 rule=rule,
-                working=working_by_day.get(day),
+                working=working,
+                wfh=day_is_wfh,
+                today=generated_on,
             )
             lines.append(line)
 
@@ -534,9 +580,11 @@ def build_attendance_report(
                             dep_on_time += 1
                     if row.worked_minutes is not None:
                         worked_minutes += row.worked_minutes
-                        missing_minutes += max(
-                            0, rule.full_day_minutes - row.worked_minutes
-                        )
+                        # A short office visit on a WFH day isn't a short day.
+                        if not day_is_wfh:
+                            missing_minutes += max(
+                                0, rule.full_day_minutes - row.worked_minutes
+                            )
             elif line.status == STATUS_ABSENT:
                 absent += 1
             elif line.status == STATUS_ON_LEAVE:
@@ -555,6 +603,7 @@ def build_attendance_report(
                 department=department_by_emp_code.get(emp.emp_code, ""),
                 pod=pods.get(emp.emp_code, ""),
                 schedule_label=_schedule_label(emp.emp_code, days, working_by_day),
+                wfh_label=_wfh_label(wfh_weekdays),
                 shift_start=_fmt_hhmm(_shift_start_minutes(rule)),
                 shift_end=_fmt_hhmm(shift_end),
                 days_expected=expected,

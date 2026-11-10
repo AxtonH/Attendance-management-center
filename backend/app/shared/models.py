@@ -54,11 +54,13 @@ class ShiftRule(BaseModel):
     # Expected workday length in minutes. Below this on a day with both
     # punches → incomplete-hours exception. Default = 8h.
     full_day_minutes: int = 480
-    # Weekdays (Mon=0..Sun=6) treated as work-from-home: still a working
-    # day, but office attendance is not tracked. No Absent/Late/Missing-
-    # punch/Incomplete-hours exceptions fire on these days. Real punches
-    # still count toward Present so the office headcount stays accurate.
-    # Phase 3 will replace this with per-employee WFH data from Odoo.
+    # WFH weekdays (Mon=0..Sun=6); Prezlab uses Thu, Fri, Sat. Each is a WFH
+    # day for any employee whose shift covers it (see `app.shared.wfh`), so
+    # WFH is resolved per employee when the roster has shift data, and
+    # applied to everyone by weekday when it doesn't (punch-derived roster).
+    # On a WFH day office attendance isn't tracked: no Absent/Late/Missing-
+    # punch/Incomplete-hours exceptions. Real punches still count toward
+    # Present so the office headcount stays accurate.
     wfh_weekdays: list[int] = []
 
 

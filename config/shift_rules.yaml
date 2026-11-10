@@ -6,7 +6,19 @@ default_shift:
   start: "09:00"           # Local time (Asia/Amman). First punch at/after this is on-time.
   grace_minutes: 15        # First punch within grace = on-time. After grace = late, and missing = absent.
   full_day_minutes: 480    # Expected workday length. Under this with both punches → incomplete-hours exception.
-  wfh_weekdays: [3]        # Mon=0..Sun=6. Thursday is WFH for everyone (phase 2 placeholder; phase 3 will pull from Odoo).
+  wfh_weekdays: [3, 4, 5]  # Mon=0..Sun=6 → Thu, Fri, Sat. Each of these is a WFH day for anyone whose
+                           # shift (Odoo working calendar) covers it; days outside the shift are weekend.
+                           #   Sun–Thu → Thu            Sat–Wed → Sat
+                           #   Mon–Fri → Thu, Fri       Fri–Tue → Fri, Sat
+                           #   Tue–Sat → Thu, Fri, Sat  Wed–Sun → Thu, Fri, Sat
+                           # On a WFH day the employee isn't expected in the office: no Absent / Late /
+                           # Missing-punch / Incomplete-hours flags, and the day is excluded from expected hours.
+
+# Optional per-shift overrides, for a shift whose WFH days should differ from the rule
+# above. The key must match the shift's working days exactly, written like an Odoo
+# calendar name: a range ("Sun - Thu") or a list ("Mon, Wed, Thu").
+#   Example: "Sun - Thu": []      # Sun–Thu fully in office, no WFH day
+wfh_by_shift: {}
 
 # Reserved for phase 2; ignored in phase 1.
 department_overrides: {}

@@ -5,7 +5,10 @@ no Absent tile count, no Late flagging, no Missing-punch / Incomplete-hours
 exceptions for the day before either when that day is also WFH.
 Real punches still count toward Present so the office headcount is honest.
 
-Phase 3 will replace this with per-employee WFH data from Odoo.
+These tests pin the no-schedule path: with no per-employee WFH sets, the
+`wfh_weekdays` rule applies to everyone by weekday (Thursday in these
+fixtures). Shift-based WFH (Thu/Fri/Sat within each employee's Odoo shift),
+the production path, is covered in `test_wfh_by_shift.py`.
 """
 
 from __future__ import annotations

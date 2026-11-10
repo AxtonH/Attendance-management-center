@@ -51,6 +51,7 @@ def employees_today(
         working_emp_codes=roster.working_emp_codes_for(day),
         on_leave_emp_codes=on_leave,
         on_holiday_emp_codes=on_holiday,
+        wfh_emp_codes=roster.wfh_emp_codes_for(day),
     )
 
 
@@ -66,8 +67,9 @@ def employees_week(
     Single paginated Supabase query for the whole week. Aggregation
     happens in memory; Odoo state is reused from cache. The shift rule
     + per-day working sets feed the per-employee expected-hours total
-    (excludes WFH days, so a Sun–Thu employee expects 4 × 8h = 32h) and
-    drive absent-day detection (`now` settles each day's cutoff).
+    (excludes the shift's WFH days, so a Sun–Thu employee expects
+    4 × 8h = 32h and a Mon–Fri one 3 × 8h = 24h) and drive absent-day
+    detection (`now` settles each day's cutoff).
     """
     start, end = week_range_for(day)
     days = iter_days(start, end)
@@ -88,6 +90,7 @@ def employees_week(
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
         on_holiday_emp_codes_by_day=holiday_by_day,
+        wfh_emp_codes_by_day={d: roster.wfh_emp_codes_for(d) for d in days},
     )
 
 
@@ -129,6 +132,7 @@ def employees_month(
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
         on_holiday_emp_codes_by_day=holiday_by_day,
+        wfh_emp_codes_by_day={d: roster.wfh_emp_codes_for(d) for d in days},
     )
     return EmployeesMonthResponse(
         range_start=week_result.range_start,
@@ -185,6 +189,7 @@ def employees_range(
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=leave_by_day,
         on_holiday_emp_codes_by_day=holiday_by_day,
+        wfh_emp_codes_by_day={d: roster.wfh_emp_codes_for(d) for d in days},
     )
     return EmployeesMonthResponse(
         range_start=result.range_start,

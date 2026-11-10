@@ -82,6 +82,7 @@ def export_employees(
     all_punches = [p for plist in punches_by_day.values() for p in plist]
     employees = roster.employees_from_punches(all_punches)
     working_by_day = {d: roster.working_emp_codes_for(d) for d in days}
+    wfh_by_day = {d: roster.wfh_emp_codes_for(d) for d in days}
     response = build_employees_week(
         employees=employees,
         punches_by_day=punches_by_day,
@@ -93,6 +94,7 @@ def export_employees(
         working_emp_codes_by_day=working_by_day,
         on_leave_emp_codes_by_day=roster.on_leave_emp_codes_for_range(s, e),
         on_holiday_emp_codes_by_day=roster.holiday_emp_codes_for_range(s, e),
+        wfh_emp_codes_by_day=wfh_by_day,
     )
 
     report = build_attendance_report(
@@ -105,6 +107,7 @@ def export_employees(
         pod_by_emp_code=roster.pod_by_emp_code(),
         working_emp_codes_by_day=working_by_day,
         emp_codes=selection,
+        wfh_emp_codes_by_day=wfh_by_day,
     )
 
     if fmt == "pdf":

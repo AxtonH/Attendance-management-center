@@ -5,6 +5,7 @@ from typing import Mapping
 
 from app.shared import shift_rules
 from app.shared.models import Employee, Punch, ShiftRule
+from app.shared.wfh import is_wfh
 
 from app.features.employees.models import (
     EmployeeDay,
@@ -29,6 +30,7 @@ def build_employees_today(
     working_emp_codes: frozenset[str] | None = None,
     on_leave_emp_codes: frozenset[str] | None = None,
     on_holiday_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
 ) -> EmployeesTodayResponse:
     """One row per employee: first and last punch of the day.
 
@@ -43,8 +45,9 @@ def build_employees_today(
     When `rule` and `now` are also provided, roster employees who were
     expected today but never punched are appended as absent rows (null
     punches, `absent=True`) — same conditions as the dashboard's absent
-    detector: not a WFH weekday, past the absent cutoff, and (if
-    `working_emp_codes` is given) on the schedule for `day`. The weekly
+    detector: past the absent cutoff, (if `working_emp_codes` is given) on
+    the schedule for `day`, and not on a WFH day per their shift
+    (`wfh_emp_codes`; None → org-wide `rule.wfh_weekdays`). The weekly
     builder doesn't pass these, so per-day punch grouping is unaffected.
 
     `on_leave_emp_codes` / `on_holiday_emp_codes` (when given) are the sets
@@ -52,7 +55,8 @@ def build_employees_today(
     by a company-wide public holiday respectively. Such an employee, if
     they'd otherwise be absent, is emitted as an excused row instead
     (`on_holiday=True` or `on_leave=True`, with `absent=False`). Holiday
-    wins over leave when both apply.
+    wins over leave when both apply. This includes their WFH days: leave
+    taken on a WFH day reads as leave, not as a day worked from home.
     """
     on_leave = on_leave_emp_codes or frozenset()
     on_holiday = on_holiday_emp_codes or frozenset()
@@ -110,14 +114,13 @@ def build_employees_today(
     # Append absent rows — roster employees expected today who never
     # punched. Gated on the same conditions as the dashboard's
     # `detect_absent` so the two views never disagree: we need a roster,
-    # a rule + clock to evaluate the cutoff, it can't be a WFH weekday,
-    # and `now` must be past the absent cutoff. Skipped entirely when the
-    # absence inputs aren't supplied (e.g. the weekly per-day path).
+    # a rule + clock to evaluate the cutoff, `now` must be past it, and the
+    # employee can't be on a WFH day. Skipped entirely when the absence
+    # inputs aren't supplied (e.g. the weekly per-day path).
     if (
         expected_emp_codes is not None
         and rule is not None
         and now is not None
-        and day.weekday() not in rule.wfh_weekdays
         and now >= shift_rules.absent_cutoff_dt(rule, day)
     ):
         roster = expected_emp_codes
@@ -135,6 +138,12 @@ def build_employees_today(
             # missing. Holiday wins over leave when both apply.
             is_on_holiday = code in on_holiday
             is_on_leave = (not is_on_holiday) and code in on_leave
+            excused = is_on_holiday or is_on_leave
+            # WFH day and not excused: not expected in the office, so no
+            # row (the report fills the gap as "WFH"). Excused days still
+            # emit so leave on a WFH day isn't miscounted as WFH.
+            if not excused and is_wfh(code, day, wfh_emp_codes, rule.wfh_weekdays):
+                continue
             rows.append(
                 EmployeeDay(
                     emp_code=code,
@@ -142,7 +151,7 @@ def build_employees_today(
                     punch_in=None,
                     punch_out=None,
                     worked_minutes=None,
-                    absent=not (is_on_holiday or is_on_leave),
+                    absent=not excused,
                     on_leave=is_on_leave,
                     on_holiday=is_on_holiday,
                 )
@@ -163,6 +172,7 @@ def build_employees_week(
     working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
     on_leave_emp_codes_by_day: Mapping[date, frozenset[str]] | None = None,
     on_holiday_emp_codes_by_day: Mapping[date, frozenset[str]] | None = None,
+    wfh_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
 ) -> EmployeesWeekResponse:
     """One parent row per employee with a child row per day in range.
 
@@ -193,10 +203,12 @@ def build_employees_week(
     absent, on-leave, and on-holiday child days never contribute.
 
     Per-employee `expected_days` counts in-office workdays for the week:
-    days the schedule covers them MINUS WFH days (Prezlab's Thursday).
-    When `rule` and `working_emp_codes_by_day` are not provided the
-    expecteds default to 0 — phase-1 behavior, no schedule data.
+    days the schedule covers them MINUS their WFH days, which depend on the
+    shift (`wfh_emp_codes_by_day`; e.g. Sun–Thu loses Thu, Mon–Fri loses
+    Thu + Fri). When `rule` and `working_emp_codes_by_day` are not provided
+    the expecteds default to 0 — phase-1 behavior, no schedule data.
     """
+    wfh_by_day = wfh_emp_codes_by_day or {}
     absence_enabled = (
         expected_emp_codes is not None and rule is not None and now is not None
     )
@@ -234,6 +246,7 @@ def build_employees_week(
                 if absence_enabled and on_holiday_emp_codes_by_day is not None
                 else None
             ),
+            wfh_emp_codes=wfh_by_day.get(day),
         )
         for row in per_day.rows:
             entry = by_code.setdefault(
@@ -269,15 +282,15 @@ def build_employees_week(
     # we already grouped — tiny.
     expected_days_by_code: dict[str, int] = {}
     if rule is not None and working_emp_codes_by_day is not None:
-        wfh = set(rule.wfh_weekdays)
         for day in days:
-            if day.weekday() in wfh:
-                continue
             working = working_emp_codes_by_day.get(day)
             if working is None:
                 continue
+            wfh_today = wfh_by_day.get(day)
             for code in by_code:
-                if code in working:
+                if code in working and not is_wfh(
+                    code, day, wfh_today, rule.wfh_weekdays
+                ):
                     expected_days_by_code[code] = (
                         expected_days_by_code.get(code, 0) + 1
                     )

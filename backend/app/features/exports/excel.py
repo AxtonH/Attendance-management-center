@@ -853,7 +853,16 @@ def _employee_summary(
             f"of {section.full_day} target",
             False,
         ),
-        ("Days from home", str(section.days_wfh), "WFH days", False),
+        (
+            "WFH days",
+            str(section.days_wfh),
+            (
+                f"per shift: {section.wfh_label}"
+                if section.wfh_label != DASH
+                else "none in period"
+            ),
+            False,
+        ),
         (
             "Avg check-in",
             section.avg_arrival,

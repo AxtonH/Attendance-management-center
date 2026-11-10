@@ -24,6 +24,7 @@ from typing import Iterable, Mapping
 
 from app.shared import shift_rules
 from app.shared.models import AttendanceStatus, Employee, Punch, ShiftRule
+from app.shared.wfh import is_wfh
 
 from app.features.dashboard.models import (
     ExceptionItem,
@@ -80,13 +81,18 @@ def detect_late(
     *,
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
+    wfh_emp_codes: frozenset[str] | None = None,
 ) -> list[tuple[int, ExceptionItem]]:
-    """Late punchers. Returns (minutes_late, item) pairs so the composer can sort."""
-    if day.weekday() in rule.wfh_weekdays:
-        return []
+    """Late punchers. Returns (minutes_late, item) pairs so the composer can sort.
+
+    Employees on a WFH day (per their shift) are never late: an office punch
+    that day is voluntary, not a tracked shift start.
+    """
     lookup = _emp_lookup(employees)
     out: list[tuple[int, ExceptionItem]] = []
     for code in _filter_roster(first_punches.keys(), expected_emp_codes):
+        if is_wfh(code, day, wfh_emp_codes, rule.wfh_weekdays):
+            continue
         first = first_punches[code]
         if shift_rules.classify(first, rule, day, now=now) != AttendanceStatus.LATE:
             continue
@@ -120,6 +126,7 @@ def detect_absent(
     expected_emp_codes: frozenset[str] | None,
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
     working_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
 ) -> list[ExceptionItem]:
     """Roster employees with no punch today, once the absent cutoff has passed.
 
@@ -129,11 +136,10 @@ def detect_absent(
 
     When `working_emp_codes` is provided, only employees whose schedule
     covers `day` are considered — someone whose calendar is Mon–Fri won't
-    be flagged absent on a Sunday.
+    be flagged absent on a Sunday. Employees on a WFH day (per their shift)
+    aren't expected in the office, so they're skipped too.
     """
     if expected_emp_codes is None:
-        return []
-    if day.weekday() in rule.wfh_weekdays:
         return []
     if now < shift_rules.absent_cutoff_dt(rule, day):
         return []
@@ -144,6 +150,8 @@ def detect_absent(
     punched = set(first_punches.keys())
     out: list[ExceptionItem] = []
     for code in roster - punched:
+        if is_wfh(code, day, wfh_emp_codes, rule.wfh_weekdays):
+            continue
         emp = lookup.get(code)
         name = _resolve_name(code, roster_names, emp)
         if name is None:
@@ -176,6 +184,7 @@ def detect_prev_day_incomplete_hours(
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
     working_emp_codes_prev_day: frozenset[str] | None = None,
+    wfh_emp_codes_prev_day: frozenset[str] | None = None,
 ) -> list[ExceptionItem]:
     """Employees whose worked minutes on the prior working day fell short of full_day_minutes.
 
@@ -186,10 +195,11 @@ def detect_prev_day_incomplete_hours(
 
     Worked minutes = last_punch - first_punch (gross, no break deduction).
     Matches what the Employees table shows, so the two views agree.
+
+    Employees for whom `prev_day` was a WFH day (per their shift) are
+    skipped: a short office visit on a WFH day isn't a short workday.
     """
     if not prev_punches or prev_day is None:
-        return []
-    if prev_day.weekday() in rule.wfh_weekdays:
         return []
     by_code: dict[str, list[datetime]] = {}
     biotime_names: dict[str, str] = {}
@@ -215,6 +225,8 @@ def detect_prev_day_incomplete_hours(
             and working_emp_codes_prev_day is not None
             and code not in working_emp_codes_prev_day
         ):
+            continue
+        if is_wfh(code, prev_day, wfh_emp_codes_prev_day, rule.wfh_weekdays):
             continue
         times = by_code[code]
         if len(times) < 2:
@@ -259,6 +271,7 @@ def detect_prev_day_missing_punch(
     roster_names: Mapping[str, str] = _EMPTY_NAMES,
     working_emp_codes_prev_day: frozenset[str] | None = None,
     wfh_weekdays: list[int] | None = None,
+    wfh_emp_codes_prev_day: frozenset[str] | None = None,
 ) -> list[ExceptionItem]:
     """Employees who had exactly one punch on the most recent prior working day.
 
@@ -270,11 +283,14 @@ def detect_prev_day_missing_punch(
     `prev_day` is the calendar date we're reporting on (used in the detail
     line); `prev_punches` are that day's punches. Both come from
     PunchRepository.punches_for_previous_working_day.
+
+    Employees for whom `prev_day` was a WFH day are skipped:
+    `wfh_emp_codes_prev_day` when the roster resolves shifts, else the
+    org-wide `wfh_weekdays` fallback.
     """
     if not prev_punches or prev_day is None:
         return []
-    if wfh_weekdays and prev_day.weekday() in wfh_weekdays:
-        return []
+    fallback_wfh = wfh_weekdays or ()
     counts: dict[str, int] = {}
     # First non-empty BioTime name we saw on prev_day — used as a fallback
     # when Odoo names aren't available (phase-1 mode).
@@ -299,6 +315,8 @@ def detect_prev_day_missing_punch(
         ):
             continue
         if counts[code] != 1:
+            continue
+        if is_wfh(code, prev_day, wfh_emp_codes_prev_day, fallback_wfh):
             continue
         emp = lookup.get(code)
         # Synthesize a fallback Employee from BioTime name if today's

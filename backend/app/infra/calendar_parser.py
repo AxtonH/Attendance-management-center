@@ -73,6 +73,21 @@ def _parse_working_segment(segment: str) -> frozenset[int] | None:
     return None
 
 
+def parse_day_name(token: str) -> int | None:
+    """Public day-name → weekday number ("Thu" → 3). None if unrecognized."""
+    return _normalize_token(token)
+
+
+def parse_day_spec(spec: str) -> frozenset[int] | None:
+    """Public parser for a bare day spec: "Sun - Thu" or "Mon, Wed, Thu".
+
+    Same grammar as the working segment of a calendar name, without the
+    pipes. Used by the `wfh_by_shift` config table. None if it doesn't
+    parse, so config loaders can fail loudly on typos.
+    """
+    return _parse_working_segment(spec)
+
+
 def parse_working_days(calendar_name: str) -> frozenset[int]:
     """Return the set of weekdays the calendar covers.
 

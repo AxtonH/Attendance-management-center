@@ -13,6 +13,7 @@ from typing import Mapping
 
 from app.shared import shift_rules
 from app.shared.models import AttendanceStatus, Employee, Punch, ShiftRule
+from app.shared.wfh import is_wfh
 
 from app.features.dashboard.exceptions import (
     detect_absent,
@@ -54,6 +55,7 @@ def build_overview(
     *,
     expected_emp_codes: frozenset[str] | None = None,
     working_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
 ) -> OverviewResponse:
     """Semantics:
 
@@ -71,27 +73,30 @@ def build_overview(
     - Present = everyone who punched (roster is unknown, so we can't filter).
     - Absent  = None → tile renders "—".
 
-    WFH days (`rule.wfh_weekdays`): no one is expected in the office, so
-    Absent = 0 and Late = 0. Present still reflects whoever did punch.
+    WFH (per employee, from their shift via `wfh_emp_codes`): someone on a
+    WFH day isn't expected in the office, so they never count toward Absent
+    or Late. Present still counts them if they punched. `wfh_emp_codes` None
+    → org-wide `rule.wfh_weekdays` fallback.
     """
-    is_wfh = day.weekday() in rule.wfh_weekdays
     grace_end = shift_rules.grace_end_dt(rule, day)
     past_grace = now >= grace_end
     first_punches = _first_punch_per_employee(punches)
     punched_codes = set(first_punches.keys())
 
+    def wfh(code: str) -> bool:
+        return is_wfh(code, day, wfh_emp_codes, rule.wfh_weekdays)
+
     if expected_emp_codes is not None:
         roster_codes = expected_emp_codes
         if working_emp_codes is not None:
             roster_codes = roster_codes & working_emp_codes
-        # WFH: nobody is "expected in office", so Absent collapses to 0.
-        # Pre-grace: same — they might still arrive. The tile only reports
-        # provisional absences once the grace window closes, matching the
-        # exceptions panel exactly (no more tile-vs-panel disagreement).
-        if is_wfh or not past_grace:
+        # Pre-grace: Absent stays 0 — they might still arrive. The tile only
+        # reports provisional absences once the grace window closes, matching
+        # the exceptions panel exactly (no more tile-vs-panel disagreement).
+        if not past_grace:
             absent: int | None = 0
         else:
-            absent = len(roster_codes - punched_codes)
+            absent = sum(1 for c in roster_codes - punched_codes if not wfh(c))
     else:
         # Phase-1 universe = whoever appears in the active punch-derived list.
         roster_codes = frozenset(e.emp_code for e in employees if e.active)
@@ -101,9 +106,9 @@ def build_overview(
     late = 0
     for code in roster_codes & punched_codes:
         present += 1
-        # Don't count Late on WFH days — those punches are voluntary
+        # Don't count Late on someone's WFH day — that punch is voluntary
         # office time, not late attendance for a tracked shift.
-        if is_wfh:
+        if wfh(code):
             continue
         first_punch = first_punches[code]
         if shift_rules.classify(first_punch, rule, day, now=now) == AttendanceStatus.LATE:
@@ -155,6 +160,8 @@ def build_exceptions(
     working_emp_codes_prev_day: frozenset[str] | None = None,
     prev_working_day: date | None = None,
     prev_working_day_punches: list[Punch] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes_prev_day: frozenset[str] | None = None,
 ) -> ExceptionsResponse:
     """Compose all detected exceptions into a single sorted list.
 
@@ -177,12 +184,14 @@ def build_exceptions(
         employees, first_punches, rule, day, now,
         expected_emp_codes=expected_emp_codes,
         roster_names=roster_names,
+        wfh_emp_codes=wfh_emp_codes,
     )
     absent_items = detect_absent(
         employees, first_punches, rule, day, now,
         expected_emp_codes=expected_emp_codes,
         roster_names=roster_names,
         working_emp_codes=working_emp_codes,
+        wfh_emp_codes=wfh_emp_codes,
     )
     missing_items = detect_prev_day_missing_punch(
         employees,
@@ -192,6 +201,7 @@ def build_exceptions(
         roster_names=roster_names,
         working_emp_codes_prev_day=working_emp_codes_prev_day,
         wfh_weekdays=rule.wfh_weekdays,
+        wfh_emp_codes_prev_day=wfh_emp_codes_prev_day,
     )
     incomplete_items = detect_prev_day_incomplete_hours(
         employees,
@@ -201,6 +211,7 @@ def build_exceptions(
         expected_emp_codes=expected_emp_codes,
         roster_names=roster_names,
         working_emp_codes_prev_day=working_emp_codes_prev_day,
+        wfh_emp_codes_prev_day=wfh_emp_codes_prev_day,
     )
 
     minutes_by_code = {item.emp_code: mins for mins, item in late_pairs}
@@ -246,13 +257,15 @@ def build_departments_rollup(
     *,
     expected_emp_codes: frozenset[str] | None = None,
     working_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
 ) -> DepartmentsResponse:
     """Group the Present/Late/Absent math by Odoo department.
 
     Same universe rules as `build_overview`: when an Odoo roster is set,
-    the universe is `expected ∩ working_today`. WFH days collapse Absent
-    and Late to 0 across all rows. Departments with zero expected employees
-    are dropped from the response (the frontend never renders 0/0 rows).
+    the universe is `expected ∩ working_today`. Employees on a WFH day stay
+    in `expected` (and `present` if they punched) but never count toward
+    Late or Absent. Departments with zero expected employees are dropped
+    from the response (the frontend never renders 0/0 rows).
 
     No I/O: department names come from the cached `department_by_emp_code`
     map. The rollup runs in one pass over (roster, punches), O(N).
@@ -260,7 +273,6 @@ def build_departments_rollup(
     if not department_by_emp_code or expected_emp_codes is None:
         return DepartmentsResponse(date=day.isoformat(), departments=[])
 
-    is_wfh = day.weekday() in rule.wfh_weekdays
     universe = expected_emp_codes
     if working_emp_codes is not None:
         universe = universe & working_emp_codes
@@ -274,16 +286,17 @@ def build_departments_rollup(
         dept = department_by_emp_code.get(code) or "Unassigned"
         slot = buckets.setdefault(dept, [0, 0, 0, 0])
         slot[0] += 1  # expected
+        wfh = is_wfh(code, day, wfh_emp_codes, rule.wfh_weekdays)
         if code in punched_codes:
             slot[1] += 1  # present
-            if not is_wfh:
+            if not wfh:
                 first = first_punches[code]
                 if (
                     shift_rules.classify(first, rule, day, now=now)
                     == AttendanceStatus.LATE
                 ):
                     slot[2] += 1  # late
-        elif not is_wfh:
+        elif not wfh:
             slot[3] += 1  # absent
 
     rows = [
@@ -366,6 +379,8 @@ def build_dashboard(
     department_by_emp_code: Mapping[str, str] | None = None,
     prev_working_day: date | None = None,
     prev_working_day_punches: list[Punch] | None = None,
+    wfh_emp_codes: frozenset[str] | None = None,
+    wfh_emp_codes_prev_day: frozenset[str] | None = None,
     arrival_bucket_minutes: int = 15,
     arrival_window_start: str = "07:30",
 ) -> DashboardResponse:
@@ -388,6 +403,7 @@ def build_dashboard(
             now,
             expected_emp_codes=expected_emp_codes,
             working_emp_codes=working_emp_codes,
+            wfh_emp_codes=wfh_emp_codes,
         ),
         exceptions=build_exceptions(
             employees,
@@ -401,6 +417,8 @@ def build_dashboard(
             working_emp_codes_prev_day=working_emp_codes_prev_day,
             prev_working_day=prev_working_day,
             prev_working_day_punches=prev_working_day_punches,
+            wfh_emp_codes=wfh_emp_codes,
+            wfh_emp_codes_prev_day=wfh_emp_codes_prev_day,
         ),
         arrivals=build_arrivals(
             punches,
@@ -417,6 +435,7 @@ def build_dashboard(
                 department_by_emp_code,
                 expected_emp_codes=expected_emp_codes,
                 working_emp_codes=working_emp_codes,
+                wfh_emp_codes=wfh_emp_codes,
             )
             if department_by_emp_code
             else build_departments_placeholder(day)

@@ -117,6 +117,10 @@ def _build_daily(
         department_by_emp_code=roster.department_by_emp_code(),
         prev_working_day=prev_day,
         prev_working_day_punches=prev_punches,
+        wfh_emp_codes=roster.wfh_emp_codes_for(day),
+        wfh_emp_codes_prev_day=(
+            roster.wfh_emp_codes_for(prev_day) if prev_day is not None else None
+        ),
     )
 
 
@@ -193,6 +197,7 @@ def _build_range(
         roster_names=roster.display_names(),
         department_by_emp_code=roster.department_by_emp_code(),
         working_emp_codes_by_day=working_by_day,
+        wfh_emp_codes_by_day={d: roster.wfh_emp_codes_for(d) for d in days},
         mode_label=kind,
         show_day_chips=show_day_chips,
     )
@@ -223,6 +228,7 @@ def overview(
         now,
         expected_emp_codes=roster.expected_emp_codes(),
         working_emp_codes=working_today,
+        wfh_emp_codes=roster.wfh_emp_codes_for(day),
     )
 
 
@@ -270,6 +276,10 @@ def exceptions(
         working_emp_codes_prev_day=working_prev,
         prev_working_day=prev_day,
         prev_working_day_punches=prev_punches,
+        wfh_emp_codes=roster.wfh_emp_codes_for(day),
+        wfh_emp_codes_prev_day=(
+            roster.wfh_emp_codes_for(prev_day) if prev_day is not None else None
+        ),
     )
 
 
@@ -301,6 +311,7 @@ def departments_rollup(
         department_by_emp_code=dept_map,
         expected_emp_codes=roster.expected_emp_codes(),
         working_emp_codes=working_today,
+        wfh_emp_codes=roster.wfh_emp_codes_for(day),
     )
 
 

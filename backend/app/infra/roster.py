@@ -15,16 +15,57 @@ provider is configured.
 
 from datetime import date
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 import yaml
 
-from app.infra.calendar_parser import PREZLAB_DEFAULT_DAYS
+from app.infra.calendar_parser import (
+    PREZLAB_DEFAULT_DAYS,
+    parse_day_name,
+    parse_day_spec,
+)
 from app.infra.odoo_calendars import OdooCalendarRepository
 from app.infra.odoo_employees import OdooEmployeeRepository
 from app.infra.odoo_holidays import OdooHolidayRepository
 from app.infra.odoo_timesheets import OdooTimesheetRepository
 from app.shared.models import Department, Employee, Punch, ShiftRule
+from app.shared.wfh import WfhPolicy
+
+
+def build_wfh_policy(
+    table: Mapping[str, Any] | None,
+    wfh_weekdays: list[int],
+) -> WfhPolicy:
+    """Build the WFH policy: the weekday rule plus `wfh_by_shift` overrides.
+
+    `wfh_weekdays` (Thu/Fri/Sat) apply to every shift that covers them.
+    `table` keys are shift day specs ("Sun - Thu", "Mon, Wed, Thu"); values
+    are lists of day names that replace the rule for that exact shift. Fails
+    loudly (ValueError) on anything ambiguous: a key or day that doesn't
+    parse, a WFH day outside its shift, or two keys naming the same shift. A
+    typo here would otherwise silently flag WFH people as absent.
+    """
+    by_shift: dict[frozenset[int], frozenset[int]] = {}
+    for spec, wfh_days in (table or {}).items():
+        shift = parse_day_spec(str(spec))
+        if shift is None:
+            raise ValueError(f"wfh_by_shift: can't parse shift {spec!r}")
+        if not isinstance(wfh_days, list):
+            raise ValueError(f"wfh_by_shift[{spec!r}] must be a list of days")
+        wfh: set[int] = set()
+        for name in wfh_days:
+            day = parse_day_name(str(name))
+            if day is None:
+                raise ValueError(f"wfh_by_shift[{spec!r}]: unknown day {name!r}")
+            wfh.add(day)
+        if not wfh <= shift:
+            raise ValueError(
+                f"wfh_by_shift[{spec!r}]: WFH days must be inside the shift"
+            )
+        if shift in by_shift:
+            raise ValueError(f"wfh_by_shift: shift {spec!r} is listed twice")
+        by_shift[shift] = frozenset(wfh)
+    return WfhPolicy(wfh_weekdays=frozenset(wfh_weekdays), overrides=by_shift)
 
 
 def exclude_excused(
@@ -59,6 +100,7 @@ class RosterProvider(Protocol):
     def expected_emp_codes(self) -> frozenset[str] | None: ...
     def display_names(self) -> Mapping[str, str]: ...
     def working_emp_codes_for(self, day: date) -> frozenset[str] | None: ...
+    def wfh_emp_codes_for(self, day: date) -> frozenset[str] | None: ...
     def department_by_emp_code(self) -> Mapping[str, str]: ...
     def pod_by_emp_code(self) -> Mapping[str, str]: ...
     def on_leave_emp_codes_for_range(
@@ -79,10 +121,21 @@ class PunchDerivedRosterProvider:
 
     def __init__(self, config_dir: Path) -> None:
         self._config_dir = config_dir
+        self._config: dict[str, Any] | None = None
         self._shift: ShiftRule | None = None
+        self._wfh: WfhPolicy | None = None
 
     def reload(self) -> None:
+        self._config = None
         self._shift = None
+        self._wfh = None
+
+    def _load_config(self) -> dict[str, Any]:
+        if self._config is None:
+            path = self._config_dir / "shift_rules.yaml"
+            with path.open("r", encoding="utf-8") as f:
+                self._config = yaml.safe_load(f) or {}
+        return self._config
 
     def employees_from_punches(self, punches: list[Punch]) -> list[Employee]:
         # Deduplicate by emp_code, keep the first non-empty name we see.
@@ -104,11 +157,17 @@ class PunchDerivedRosterProvider:
 
     def default_shift(self) -> ShiftRule:
         if self._shift is None:
-            path = self._config_dir / "shift_rules.yaml"
-            with path.open("r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-            self._shift = ShiftRule(**data["default_shift"])
+            self._shift = ShiftRule(**self._load_config()["default_shift"])
         return self._shift
+
+    def wfh_policy(self) -> WfhPolicy:
+        """WFH rule + overrides from config. Shared with the Odoo provider."""
+        if self._wfh is None:
+            self._wfh = build_wfh_policy(
+                self._load_config().get("wfh_by_shift"),
+                self.default_shift().wfh_weekdays,
+            )
+        return self._wfh
 
     def expected_emp_codes(self) -> frozenset[str] | None:
         # Phase 1: we don't know the full roster, so "absent" can't be
@@ -123,6 +182,11 @@ class PunchDerivedRosterProvider:
     def working_emp_codes_for(self, day: date) -> frozenset[str] | None:
         # Phase 1: we don't have schedule data, so we can't filter by day.
         # Returning None signals "no schedule info — don't apply this filter".
+        return None
+
+    def wfh_emp_codes_for(self, day: date) -> frozenset[str] | None:
+        # Phase 1: no shifts, so no per-employee WFH. None tells domain code
+        # to apply the `default_shift.wfh_weekdays` rule to everyone.
         return None
 
     def department_by_emp_code(self) -> Mapping[str, str]:
@@ -211,17 +275,42 @@ class OdooRosterProvider:
         the most common shape, and consistent with the "no surprises" rule.
         """
         weekday = day.weekday()
-        emp_to_cal = self._odoo_employees.calendar_ids()
-        working: set[str] = set()
-        for code, cal_id in emp_to_cal.items():
+        return frozenset(
+            code
+            for code, days in self._working_days_by_code().items()
+            if weekday in days
+        )
+
+    def wfh_emp_codes_for(self, day: date) -> frozenset[str]:
+        """Employees whose shift makes `day` a WFH day.
+
+        Each employee's working-day set (same lookup as
+        `working_emp_codes_for`) goes through the WFH policy: Thu/Fri/Sat
+        within the shift, unless a `wfh_by_shift` override pins that shift.
+        A WFH day is always inside the shift, so this is a subset of the
+        working set for `day`.
+        """
+        weekday = day.weekday()
+        policy = self._fallback.wfh_policy()
+        return frozenset(
+            code
+            for code, days in self._working_days_by_code().items()
+            if weekday in policy.wfh_weekdays_for(days)
+        )
+
+    def _working_days_by_code(self) -> dict[str, frozenset[int]]:
+        """emp_code → working weekdays, composed from two cached lookups.
+
+        Employees with no calendar fall back to Prezlab's standard Sun–Thu.
+        """
+        out: dict[str, frozenset[int]] = {}
+        for code, cal_id in self._odoo_employees.calendar_ids().items():
             if cal_id is None:
                 # No calendar configured → Prezlab default (Sun–Thu).
-                days = PREZLAB_DEFAULT_DAYS
+                out[code] = PREZLAB_DEFAULT_DAYS
             else:
-                days = self._odoo_calendars.working_days_for_calendar(cal_id)
-            if weekday in days:
-                working.add(code)
-        return frozenset(working)
+                out[code] = self._odoo_calendars.working_days_for_calendar(cal_id)
+        return out
 
     def on_leave_emp_codes_for_range(
         self, start: date, end: date

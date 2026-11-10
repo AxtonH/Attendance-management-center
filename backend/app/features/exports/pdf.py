@@ -214,6 +214,11 @@ def _employee_page(section: EmployeeSection, period_label: str) -> list:
     elements: list = [
         Paragraph(escape(section.name), _H2),
         Paragraph(f"Emp code {escape(section.emp_code)}{dept}", _SUBTITLE),
+        Paragraph(
+            f"Schedule {section.schedule_label} · WFH days per shift: "
+            f"{section.wfh_label}",
+            _SUBTITLE,
+        ),
         Paragraph(period_label, _SUBTITLE),
         Spacer(1, 4 * mm),
     ]
@@ -231,6 +236,7 @@ def _employee_page(section: EmployeeSection, period_label: str) -> list:
         ("On leave", str(section.days_on_leave)),
         ("Attendance", section.attendance_pct),
         ("Holidays", str(section.days_holiday)),
+        ("WFH days", str(section.days_wfh)),
     ]
     rows = [pairs[i : i + 2] for i in range(0, len(pairs), 2)]
     data = []

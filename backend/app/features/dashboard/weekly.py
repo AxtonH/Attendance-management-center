@@ -49,8 +49,16 @@ from app.features.dashboard.service import (
 from app.shared import shift_rules
 from app.shared.date_range import iter_days
 from app.shared.models import AttendanceStatus, Employee, Punch, ShiftRule
+from app.shared.wfh import is_wfh
 
 _WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+DaySets = Mapping[date, frozenset[str] | None]
+
+
+def _for_day(by_day: DaySets | None, day: date) -> frozenset[str] | None:
+    """Per-day set lookup; None when the map (or that day) is missing."""
+    return by_day.get(day) if by_day else None
 
 
 # ---------- Overview ----------
@@ -63,26 +71,26 @@ def build_weekly_overview(
     now: datetime,
     *,
     expected_emp_codes: frozenset[str] | None = None,
-    working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    working_emp_codes_by_day: DaySets | None = None,
+    wfh_emp_codes_by_day: DaySets | None = None,
 ) -> OverviewResponse:
     """Aggregate Present/Late/Absent across the week.
 
     - Present = distinct employees who showed up at least once in the week.
       One Prezlaber who came in 4 days still counts as 1.
     - Late and Absent = person-day sums (one person late on 3 days = 3).
+      An employee's WFH days (per their shift) never add to either.
     """
     present_codes: set[str] = set()
     total_late = 0
     total_absent = 0
 
     for day in days:
-        is_wfh = day.weekday() in rule.wfh_weekdays
+        wfh_today = _for_day(wfh_emp_codes_by_day, day)
         first_punches = _first_punch_per_employee(punches_by_day.get(day, []))
         punched = set(first_punches.keys())
 
-        working = (
-            working_emp_codes_by_day.get(day) if working_emp_codes_by_day else None
-        )
+        working = _for_day(working_emp_codes_by_day, day)
         if expected_emp_codes is not None:
             roster = expected_emp_codes
             if working is not None:
@@ -93,12 +101,15 @@ def build_weekly_overview(
         # Present: accumulate distinct codes across the whole week.
         present_codes |= roster & punched
 
-        # Late and Absent both suppressed on WFH days and during the
-        # grace window (no provisional flags before grace_end).
-        if is_wfh or now < shift_rules.grace_end_dt(rule, day):
+        # Late and Absent both suppressed during the grace window (no
+        # provisional flags before grace_end) and on each person's WFH days.
+        if now < shift_rules.grace_end_dt(rule, day):
             continue
+        office = {
+            c for c in roster if not is_wfh(c, day, wfh_today, rule.wfh_weekdays)
+        }
         # Late: count those whose first punch was past grace.
-        for code in roster & punched:
+        for code in office & punched:
             if (
                 shift_rules.classify(first_punches[code], rule, day, now=now)
                 == AttendanceStatus.LATE
@@ -106,7 +117,7 @@ def build_weekly_overview(
                 total_late += 1
         # Absent only counted when we have a real roster (Odoo).
         if expected_emp_codes is not None:
-            total_absent += len(roster - punched)
+            total_absent += len(office - punched)
 
     return OverviewResponse(
         date=days[0].isoformat(),
@@ -127,7 +138,8 @@ def build_weekly_departments_rollup(
     department_by_emp_code: Mapping[str, str],
     *,
     expected_emp_codes: frozenset[str] | None = None,
-    working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    working_emp_codes_by_day: DaySets | None = None,
+    wfh_emp_codes_by_day: DaySets | None = None,
 ) -> DepartmentsResponse:
     """Per-department weekly rollup.
 
@@ -153,13 +165,11 @@ def build_weekly_departments_rollup(
         return department_by_emp_code.get(code) or "Unassigned"
 
     for day in days:
-        is_wfh = day.weekday() in rule.wfh_weekdays
+        wfh_today = _for_day(wfh_emp_codes_by_day, day)
         first_punches = _first_punch_per_employee(punches_by_day.get(day, []))
         punched = set(first_punches.keys())
 
-        working = (
-            working_emp_codes_by_day.get(day) if working_emp_codes_by_day else None
-        )
+        working = _for_day(working_emp_codes_by_day, day)
         roster = expected_emp_codes
         if working is not None:
             roster = roster & working
@@ -167,16 +177,17 @@ def build_weekly_departments_rollup(
         for code in roster:
             dept = dept_of(code)
             expected_people[dept].add(code)
+            wfh = is_wfh(code, day, wfh_today, rule.wfh_weekdays)
             if code in punched:
                 present_people[dept].add(code)
-                if not is_wfh:
+                if not wfh:
                     first = first_punches[code]
                     if (
                         shift_rules.classify(first, rule, day, now=now)
                         == AttendanceStatus.LATE
                     ):
                         late_pdays[dept] += 1
-            elif not is_wfh and now >= shift_rules.grace_end_dt(rule, day):
+            elif not wfh and now >= shift_rules.grace_end_dt(rule, day):
                 absent_pdays[dept] += 1
 
     rows = [
@@ -273,8 +284,9 @@ def build_weekly_exceptions(
     filter_type: str = "all",
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] | None = None,
-    working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    working_emp_codes_by_day: DaySets | None = None,
     show_day_chips: bool = True,
+    wfh_emp_codes_by_day: DaySets | None = None,
 ) -> ExceptionsResponse:
     """Run every per-day detector across the range, then group by (tag, emp_code).
 
@@ -317,9 +329,8 @@ def build_weekly_exceptions(
 
     for day in days:
         first_punches = _first_punch_per_employee(punches_by_day.get(day, []))
-        working_today = (
-            working_emp_codes_by_day.get(day) if working_emp_codes_by_day else None
-        )
+        working_today = _for_day(working_emp_codes_by_day, day)
+        wfh_today = _for_day(wfh_emp_codes_by_day, day)
 
         absorb(
             [
@@ -332,6 +343,7 @@ def build_weekly_exceptions(
                     now,
                     expected_emp_codes=expected_emp_codes,
                     roster_names=roster_names,
+                    wfh_emp_codes=wfh_today,
                 )
             ],
             day,
@@ -346,6 +358,7 @@ def build_weekly_exceptions(
                 expected_emp_codes=expected_emp_codes,
                 roster_names=roster_names,
                 working_emp_codes=working_today,
+                wfh_emp_codes=wfh_today,
             ),
             day,
         )
@@ -358,11 +371,8 @@ def build_weekly_exceptions(
         prev_day = day - timedelta(days=1)
         if prev_day >= days[0]:
             prev_punches = punches_by_day.get(prev_day, [])
-            working_prev = (
-                working_emp_codes_by_day.get(prev_day)
-                if working_emp_codes_by_day
-                else None
-            )
+            working_prev = _for_day(working_emp_codes_by_day, prev_day)
+            wfh_prev = _for_day(wfh_emp_codes_by_day, prev_day)
             absorb(
                 detect_prev_day_missing_punch(
                     employees,
@@ -372,6 +382,7 @@ def build_weekly_exceptions(
                     roster_names=roster_names,
                     working_emp_codes_prev_day=working_prev,
                     wfh_weekdays=rule.wfh_weekdays,
+                    wfh_emp_codes_prev_day=wfh_prev,
                 ),
                 prev_day,
             )
@@ -384,6 +395,7 @@ def build_weekly_exceptions(
                     expected_emp_codes=expected_emp_codes,
                     roster_names=roster_names,
                     working_emp_codes_prev_day=working_prev,
+                    wfh_emp_codes_prev_day=wfh_prev,
                 ),
                 prev_day,
             )
@@ -468,7 +480,8 @@ def build_weekly_dashboard(
     expected_emp_codes: frozenset[str] | None = None,
     roster_names: Mapping[str, str] | None = None,
     department_by_emp_code: Mapping[str, str] | None = None,
-    working_emp_codes_by_day: Mapping[date, frozenset[str] | None] | None = None,
+    working_emp_codes_by_day: DaySets | None = None,
+    wfh_emp_codes_by_day: DaySets | None = None,
     arrival_bucket_minutes: int = 15,
     arrival_window_start: str = "07:30",
     mode_label: str = "weekly",
@@ -485,6 +498,7 @@ def build_weekly_dashboard(
         punches_by_day, rule, days, now,
         expected_emp_codes=expected_emp_codes,
         working_emp_codes_by_day=working_emp_codes_by_day,
+        wfh_emp_codes_by_day=wfh_emp_codes_by_day,
     )
     exceptions = build_weekly_exceptions(
         employees, punches_by_day, rule, days, now,
@@ -492,6 +506,7 @@ def build_weekly_dashboard(
         roster_names=roster_names,
         working_emp_codes_by_day=working_emp_codes_by_day,
         show_day_chips=show_day_chips,
+        wfh_emp_codes_by_day=wfh_emp_codes_by_day,
     )
     arrivals = build_weekly_arrivals(
         punches_by_day, days,
@@ -504,6 +519,7 @@ def build_weekly_dashboard(
             punches_by_day, rule, days, now, department_by_emp_code,
             expected_emp_codes=expected_emp_codes,
             working_emp_codes_by_day=working_emp_codes_by_day,
+            wfh_emp_codes_by_day=wfh_emp_codes_by_day,
         )
     else:
         departments = DepartmentsResponse(date=days[0].isoformat(), departments=[])
